@@ -104,15 +104,13 @@ node ~/.claude/tools/grog/index.js $ARGUMENTS
 
 ## What to do with the output
 
-1. Parse the issue details from the output
-2. Present the information clearly to the user:
-   - Issue title and number
-   - Current state (open/closed)
-   - Author and creation date
-   - Labels (if any)
-   - Full description
+1. Briefly summarize the issue (title, state, key labels)
+2. Analyze the codebase to understand how to implement the requested feature or fix
+3. Create a concrete implementation plan with specific files to modify/create
+4. Start implementing the solution immediately - don't ask for permission, just do it
+5. If you need to make architectural decisions, pick the simplest approach that fits the existing codebase patterns
 
-3. If the user wants to work on the issue, offer to help implement the solution based on the issue description.
+Be proactive: your goal is to solve the issue, not just report on it.
 
 ## Error Handling
 
