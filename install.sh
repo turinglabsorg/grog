@@ -86,7 +86,7 @@ cat > "$SKILLS_DIR/SKILL.md" << 'EOF'
 ---
 name: grog
 description: Fetch GitHub issue details. Use when the user provides a GitHub issue URL or asks to look at/fetch/get a GitHub issue.
-allowed-tools: Bash
+allowed-tools: Bash, Read
 argument-hint: <github-issue-url>
 ---
 
@@ -102,13 +102,21 @@ When the user provides a GitHub issue URL (like `https://github.com/owner/repo/i
 node ~/.claude/tools/grog/index.js $ARGUMENTS
 ```
 
+The tool automatically downloads any image attachments to `/tmp/grog-attachments/`.
+
+## IMPORTANT: Analyze Image Attachments
+
+If the output shows "IMAGE ATTACHMENTS" with file paths, you MUST use the Read tool to view each image file. These screenshots/mockups are critical for understanding the issue. Do this immediately after running grog, before doing anything else.
+
 ## What to do with the output
 
-1. Briefly summarize the issue (title, state, key labels)
-2. Analyze the codebase to understand how to implement the requested feature or fix
-3. Create a concrete implementation plan with specific files to modify/create
-4. Start implementing the solution immediately - don't ask for permission, just do it
-5. If you need to make architectural decisions, pick the simplest approach that fits the existing codebase patterns
+1. Run grog to fetch the issue
+2. If image paths are shown, use Read tool on EACH image file to view them
+3. Briefly summarize the issue (title, state, key labels) including what the images show
+4. Analyze the codebase to understand how to implement the requested feature or fix
+5. Create a concrete implementation plan with specific files to modify/create
+6. Start implementing the solution immediately - don't ask for permission, just do it
+7. If you need to make architectural decisions, pick the simplest approach that fits the existing codebase patterns
 
 Be proactive: your goal is to solve the issue, not just report on it.
 

@@ -66,6 +66,8 @@ grog https://github.com/your/repo/issues/42
 
 That's it. No flags. No options. No 47-page documentation. Just paste the URL and receive wisdom.
 
+GROG automatically downloads any image attachments (screenshots, mockups, etc.) to `/tmp/grog-attachments/` and shows you the file paths. Perfect for when someone files a bug report with 7 screenshots and the description just says "it's broken."
+
 ## What you get
 
 ```
@@ -155,6 +157,7 @@ I know. We're as surprised as you are.
 
 ## Roadmap (Lies We Tell Ourselves)
 
+- [x] Download image attachments (done! we surprised ourselves)
 - [ ] Fetch pull requests (coming Soon™)
 - [ ] Support for GitLab (when someone pays us)
 - [ ] Even bigger ASCII art (the people demand it)

@@ -3,6 +3,7 @@
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { writeFileSync, mkdirSync, existsSync, renameSync } from "fs";
 
 // Load .env from the package directory
 const __filename = fileURLToPath(import.meta.url);
@@ -58,6 +59,85 @@ async function fetchIssue(owner, repo, issueNumber) {
 }
 
 /**
+ * Extract image URLs from issue body
+ * @param {string} body - Issue body content
+ * @returns {string[]} Array of image URLs
+ */
+function extractImageUrls(body) {
+  if (!body) return [];
+
+  const urls = new Set();
+
+  // Match HTML img tags: <img ... src="URL" ... />
+  const imgTagRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+  let match;
+  while ((match = imgTagRegex.exec(body)) !== null) {
+    urls.add(match[1]);
+  }
+
+  // Match Markdown images: ![alt](URL)
+  const mdImageRegex = /!\[[^\]]*\]\(([^)]+)\)/g;
+  while ((match = mdImageRegex.exec(body)) !== null) {
+    urls.add(match[1]);
+  }
+
+  // Match raw GitHub user-attachments URLs
+  const rawUrlRegex = /https:\/\/github\.com\/user-attachments\/assets\/[a-f0-9-]+/gi;
+  while ((match = rawUrlRegex.exec(body)) !== null) {
+    urls.add(match[0]);
+  }
+
+  // Match private user images
+  const privateImageRegex = /https:\/\/private-user-images\.githubusercontent\.com\/[^\s"'<>]+/gi;
+  while ((match = privateImageRegex.exec(body)) !== null) {
+    urls.add(match[0]);
+  }
+
+  return Array.from(urls);
+}
+
+/**
+ * Get file extension from content-type
+ * @param {string} contentType
+ * @returns {string}
+ */
+function getExtension(contentType) {
+  const typeMap = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/svg+xml": "svg",
+    "image/bmp": "bmp",
+  };
+  return typeMap[contentType] || "png";
+}
+
+/**
+ * Download an image from URL
+ * @param {string} url - Image URL
+ * @param {string} outputPath - Where to save the image
+ */
+async function downloadImage(url, outputPath) {
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${GH_TOKEN}`,
+      "User-Agent": "grog-cli/1.0",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to download: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  const buffer = await response.arrayBuffer();
+  writeFileSync(outputPath, Buffer.from(buffer));
+
+  return { contentType, size: buffer.byteLength };
+}
+
+/**
  * Main function
  */
 async function main() {
@@ -94,6 +174,43 @@ async function main() {
     console.log("\nDescription:\n");
     console.log(issue.body || "(No description provided)");
     console.log("\n" + "=".repeat(60));
+
+    // Extract and download images
+    const imageUrls = extractImageUrls(issue.body);
+
+    if (imageUrls.length > 0) {
+      console.log(`\nFound ${imageUrls.length} image attachment(s). Downloading...\n`);
+
+      const outputDir = "/tmp/grog-attachments";
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+      }
+
+      const downloadedFiles = [];
+
+      for (let i = 0; i < imageUrls.length; i++) {
+        const url = imageUrls[i];
+        try {
+          const tempPath = join(outputDir, `temp-${Date.now()}-${i}`);
+          const { contentType, size } = await downloadImage(url, tempPath);
+          const ext = getExtension(contentType);
+          const filename = `${parsed.repo}-issue-${parsed.issueNumber}-img-${i + 1}.${ext}`;
+          const finalPath = join(outputDir, filename);
+          renameSync(tempPath, finalPath);
+          console.log(`  Downloaded: ${finalPath} (${(size / 1024).toFixed(1)} KB)`);
+          downloadedFiles.push(finalPath);
+        } catch (err) {
+          console.error(`  Failed to download image ${i + 1}: ${err.message}`);
+        }
+      }
+
+      if (downloadedFiles.length > 0) {
+        console.log("\n" + "=".repeat(60));
+        console.log("IMAGE ATTACHMENTS (use Read tool to analyze these):");
+        console.log("=".repeat(60));
+        downloadedFiles.forEach((f) => console.log(f));
+      }
+    }
 
   } catch (error) {
     console.error("Error fetching issue:", error.message);
