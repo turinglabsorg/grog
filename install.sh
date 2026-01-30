@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # GROG Installer
-# Installs grog to ~/.claude/tools/grog and creates the Claude Code skill
+# Installs grog to ~/.claude/tools/grog and creates the Claude Code skills
 
 set -e
 
@@ -28,13 +28,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Target directories
 TOOLS_DIR="$HOME/.claude/tools/grog"
-SKILLS_DIR="$HOME/.claude/skills/grog"
+SKILLS_DIR="$HOME/.claude/skills"
 
 echo -e "${CYAN}[1/5]${NC} Creating directories..."
 mkdir -p "$TOOLS_DIR"
-mkdir -p "$SKILLS_DIR"
+mkdir -p "$SKILLS_DIR/grog-solve"
+mkdir -p "$SKILLS_DIR/grog-explore"
+# Remove old /grog skill if it exists
+rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} Created $TOOLS_DIR"
-echo -e "  ${GREEN}✓${NC} Created $SKILLS_DIR"
+echo -e "  ${GREEN}✓${NC} Created skill directories"
 
 echo ""
 echo -e "${CYAN}[2/5]${NC} Copying files..."
@@ -80,26 +83,27 @@ if [ "$SKIP_TOKEN" != "true" ]; then
 fi
 
 echo ""
-echo -e "${CYAN}[5/5]${NC} Creating Claude Code skill..."
+echo -e "${CYAN}[5/5]${NC} Creating Claude Code skills..."
 
-cat > "$SKILLS_DIR/SKILL.md" << 'EOF'
+# Skill 1: /grog-solve - Fetch and solve a single issue
+cat > "$SKILLS_DIR/grog-solve/SKILL.md" << 'EOF'
 ---
-name: grog
-description: Fetch GitHub issue details. Use when the user provides a GitHub issue URL or asks to look at/fetch/get a GitHub issue.
+name: grog-solve
+description: Fetch and solve a GitHub issue. Use when the user provides a GitHub issue URL or asks to solve/fix/implement a GitHub issue.
 allowed-tools: Bash, Read
 argument-hint: <github-issue-url>
 ---
 
-# GROG - GitHub Issue Fetcher
+# GROG Solve - GitHub Issue Solver
 
-Fetch and display GitHub issue details using the grog tool.
+Fetch a GitHub issue and immediately start solving it.
 
 ## Usage
 
 When the user provides a GitHub issue URL (like `https://github.com/owner/repo/issues/123`), run:
 
 ```bash
-node ~/.claude/tools/grog/index.js $ARGUMENTS
+node ~/.claude/tools/grog/index.js solve $ARGUMENTS
 ```
 
 The tool automatically downloads any image attachments to `/tmp/grog-attachments/`.
@@ -110,7 +114,7 @@ If the output shows "IMAGE ATTACHMENTS" with file paths, you MUST use the Read t
 
 ## What to do with the output
 
-1. Run grog to fetch the issue
+1. Run grog solve to fetch the issue
 2. If image paths are shown, use Read tool on EACH image file to view them
 3. Briefly summarize the issue (title, state, key labels) including what the images show
 4. Analyze the codebase to understand how to implement the requested feature or fix
@@ -126,20 +130,79 @@ Be proactive: your goal is to solve the issue, not just report on it.
 - If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
 EOF
 
-echo -e "  ${GREEN}✓${NC} Created skill at $SKILLS_DIR/SKILL.md"
+echo -e "  ${GREEN}✓${NC} Created /grog-solve skill"
+
+# Skill 2: /grog-explore - Explore a project's issues for batch processing
+cat > "$SKILLS_DIR/grog-explore/SKILL.md" << 'EOF'
+---
+name: grog-explore
+description: Explore a GitHub repository's issues for batch processing. Use when the user provides a GitHub repo URL and wants to work through multiple issues.
+allowed-tools: Bash, Read
+argument-hint: <github-project-url>
+---
+
+# GROG Explore - GitHub Project Issue Explorer
+
+List all issues from a GitHub Project or repository for batch processing.
+
+## Usage
+
+Supports both GitHub Projects and repositories:
+
+```bash
+# For GitHub Projects (recommended for multi-repo workflows)
+node ~/.claude/tools/grog/index.js explore https://github.com/orgs/orgname/projects/1
+
+# For a single repository
+node ~/.claude/tools/grog/index.js explore https://github.com/owner/repo
+```
+
+## Supported URL formats
+
+- **Org Project**: `https://github.com/orgs/orgname/projects/123`
+- **User Project**: `https://github.com/users/username/projects/123`
+- **Repository**: `https://github.com/owner/repo`
+
+## Workflow
+
+1. Run grog explore to fetch all issues
+2. For Projects: issues are grouped by status (Todo, In Progress, Done, etc.)
+3. For Repos: issues are grouped by labels
+4. Ask the user which issues they want to work on:
+   - A status name (e.g., "Todo", "In Progress") for projects
+   - A label name (e.g., "bug", "enhancement") for repos
+   - Specific issue references (e.g., "#123, #456")
+   - "all" to work on all issues
+5. Once the user selects, process each issue one by one:
+   - Use `/grog-solve <issue-url>` to fetch the full issue details
+   - Implement the solution
+   - Commit the changes with a descriptive message
+   - Move to the next issue
+
+## Error Handling
+
+- If no URL is provided, ask the user for the GitHub project or repository URL
+- If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
+EOF
+
+echo -e "  ${GREEN}✓${NC} Created /grog-explore skill"
 
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}  Installation complete! 🏴‍☠️${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 echo ""
-echo -e "You can now use ${CYAN}/grog${NC} in any Claude Code session:"
+echo -e "You can now use these commands in any Claude Code session:"
 echo ""
-echo -e "  ${YELLOW}/grog https://github.com/owner/repo/issues/123${NC}"
+echo -e "  ${CYAN}/grog-solve${NC} <issue-url>  - Fetch and solve a single issue"
+echo -e "  ${CYAN}/grog-explore${NC} <repo-url> - List all issues for batch processing"
 echo ""
-echo -e "Or just paste a GitHub issue URL and Claude will fetch it automatically!"
+echo -e "Examples:"
+echo -e "  ${YELLOW}/grog-solve https://github.com/owner/repo/issues/123${NC}"
+echo -e "  ${YELLOW}/grog-explore https://github.com/orgs/myorg/projects/1${NC}"
+echo -e "  ${YELLOW}/grog-explore https://github.com/owner/repo${NC}"
 echo ""
 echo -e "Files installed to:"
-echo -e "  Tool:  ${CYAN}$TOOLS_DIR${NC}"
-echo -e "  Skill: ${CYAN}$SKILLS_DIR${NC}"
+echo -e "  Tool:   ${CYAN}$TOOLS_DIR${NC}"
+echo -e "  Skills: ${CYAN}$SKILLS_DIR/grog-*${NC}"
 echo ""

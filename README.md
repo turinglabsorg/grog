@@ -1,4 +1,4 @@
-# GROG 🏴‍☠️
+# GROG
 
 > *"Arr matey, fetch me that issue or walk the plank!"*
 
@@ -10,175 +10,170 @@ GROG is a CLI tool that fetches GitHub issues faster than you can say "shiver me
 
 Why is it called GROG? Because after debugging production issues at 3 AM, you'll need a drink. Also, **G**itHub **R**etrieving **O**perations **G**adget. *(We made up that acronym after naming it, obviously.)*
 
+## Features
+
+- **`/grog-solve`** - Fetch a single GitHub issue and solve it
+- **`/grog-explore`** - Explore all issues from a GitHub Project or repository
+  - Supports GitHub Projects (multi-repo kanban boards)
+  - Supports single repositories
+  - Groups issues by status (for projects) or labels (for repos)
+  - Hides completed/done issues automatically
+  - Paginated API calls to fetch ALL issues (not just the first 100)
+- **Automatic image downloads** - Screenshots and mockups saved to `/tmp/grog-attachments/`
+
 ## Installation
 
 ### For Claude Code (Recommended)
 
-Run the installer and prepare to witness ASCII art so majestic, it'll make your terminal weep tears of joy:
+Run the installer:
 
 ```bash
 ./install.sh
 ```
 
-![Installation Preview](preview.png)
-
-Behold, the five sacred steps of installation:
-
-1. **Creating directories** - We make folders. Revolutionary, we know.
-2. **Copying files** - `index.js` and `package.json` find their new home.
-3. **Installing dependencies** - `npm install` but with ✓ checkmarks for dopamine.
-4. **Configuring GitHub token** - Where you pretend you remember where you saved it.
-5. **Victory** - You're now a certified GROG operator. Tell your mom.
-
 This will:
 - Install grog to `~/.claude/tools/grog`
-- Create a `/grog` skill for Claude Code
+- Create `/grog-solve` and `/grog-explore` skills for Claude Code
 - Ask for your GitHub token and store it securely
-- Display the most beautiful ASCII art this side of the seven seas
 
 Then in any Claude Code session:
-```
-/grog https://github.com/your/repo/issues/42
-```
 
-Or just paste a GitHub issue URL and Claude will fetch it automatically!
+```bash
+# Solve a single issue
+/grog-solve https://github.com/owner/repo/issues/123
+
+# Explore all issues in a GitHub Project
+/grog-explore https://github.com/orgs/myorg/projects/1
+
+# Explore all issues in a repository
+/grog-explore https://github.com/owner/repo
+```
 
 ### Manual Installation
 
 ```bash
-npm install -g grog
-
-# Or if you're feeling rebellious:
-yarn global add grog
+npm install
 ```
 
-Create a `.env` file with your GitHub token (guard it like buried treasure):
+Create a `.env` file with your GitHub token:
 
 ```env
-GH_TOKEN=your_super_secret_token_here
+GH_TOKEN=your_token_here
 ```
 
-## Standalone Usage
+## Usage
+
+### Solve a Single Issue
 
 ```bash
-grog https://github.com/your/repo/issues/42
+node index.js solve https://github.com/owner/repo/issues/123
 ```
 
-That's it. No flags. No options. No 47-page documentation. Just paste the URL and receive wisdom.
+Fetches the issue details, downloads any image attachments, and displays everything for you to start working on it.
 
-GROG automatically downloads any image attachments (screenshots, mockups, etc.) to `/tmp/grog-attachments/` and shows you the file paths. Perfect for when someone files a bug report with 7 screenshots and the description just says "it's broken."
+### Explore a GitHub Project
 
-## What you get
+```bash
+node index.js explore https://github.com/orgs/myorg/projects/1
+```
+
+Lists all issues from the project, grouped by status. Done issues are hidden by default. Perfect for batch processing a backlog.
+
+**Supported URL formats:**
+- Org Projects: `https://github.com/orgs/orgname/projects/123`
+- User Projects: `https://github.com/users/username/projects/123`
+- Repositories: `https://github.com/owner/repo`
+
+### Example Output (Explore)
 
 ```
-📌 Issue #42: The answer to life, the universe, and everything
-📊 State: open (because nothing is ever truly fixed)
-👤 Author: some-dev-who-gave-up
-📅 Created: 2024-01-15T03:00:00Z (3 AM, naturally)
-🏷️  Labels: bug, help-wanted, crying-in-the-corner
+============================================================
+PROJECT: My Awesome Project
+============================================================
+URL: https://github.com/orgs/myorg/projects/1
+
+Found 220 issue(s) total (173 done, 47 active):
+
+STATUSES:
+----------------------------------------
+  [Questions] - 11 issue(s)
+  [Ideas] - 3 issue(s)
+  [Bug] - 0 issue(s)
+  [Backlog] - 23 issue(s)
+  [Todo] - 5 issue(s)
+  [In Progress] - 0 issue(s)
+  [Testing] - 5 issue(s)
+  [Done] - 173 issue(s) (hidden)
+
+============================================================
+NEXT STEPS:
+============================================================
+
+Active issues:
+  myorg/repo#114 Fix the login button
+  myorg/repo#75 Update documentation
+  ...
+```
+
+## What You Get (Solve)
+
+```
+============================================================
+Issue #42: The answer to life, the universe, and everything
+============================================================
+State: open
+Author: some-dev
+Created: 1/15/2024, 3:00:00 AM
+Labels: bug, help-wanted
+------------------------------------------------------------
+
+Description:
 
 The login button sometimes logs you out. Other times it orders pizza.
 We're not sure which is the bug.
+
+============================================================
+
+IMAGE ATTACHMENTS (use Read tool to analyze these):
+============================================================
+/tmp/grog-attachments/repo-issue-42-img-1.png
 ```
-
-## Why GROG?
-
-| Other Tools | GROG |
-|-------------|------|
-| Open browser | No browser needed |
-| Click 47 times | One command |
-| Wait for JS to load | Instant gratification |
-| Get distracted by cat videos | Stay focused (mostly) |
-| Feel productive | Actually be productive |
 
 ## Requirements
 
-- Node.js (any version that doesn't make you cry)
-- A GitHub token (free with any GitHub account, batteries not included)
+- Node.js 18+ (for native fetch support)
+- A GitHub Personal Access Token with `repo` scope
 - A burning desire to never leave the terminal
 
-## Error Messages (A Feature, Not a Bug)
-
-- **"No GitHub token found"** - You forgot the `.env` file. It happens to the best of us.
-- **"Invalid GitHub issue URL"** - That's not an issue URL, that's your shopping list.
-- **"No issue URL provided"** - You literally had one job.
-
 ## The GitHub Token Situation
-
-Look, we need a Personal Access Token. Yes, another token. Yes, you'll forget where you put it in 3 days.
 
 Get one at: https://github.com/settings/tokens
 
 Required scopes:
-- `repo` - To read issues (we promise we won't judge your code)
-- That's it. We're not greedy.
-
-Pro tip: Store your token somewhere safe. Not in a sticky note. Not in `passwords.txt`. We believe in you (barely).
+- `repo` - To read issues and projects
+- `read:project` - For GitHub Projects v2 access (if using projects)
 
 ## FAQ
 
-**Q: Why not just use `gh issue view`?**
-A: Because we didn't know that existed when we started this project. Also, branding.
+**Q: Why two commands instead of one?**
+A: Because `/grog-solve` is for "I know exactly what issue I want to fix" and `/grog-explore` is for "show me everything and let me pick."
 
-**Q: Is this production-ready?**
-A: It works on my machine. ¯\\\_(ツ)\_/¯
+**Q: Why are Done issues hidden?**
+A: Because you don't need to see 173 completed issues when you're trying to find work to do.
 
-**Q: Can I contribute?**
-A: Yes! We accept pull requests, issues, and emotional support.
+**Q: Can it fetch more than 100 issues?**
+A: Yes! We paginate through all items automatically. No artificial limits here.
 
-**Q: Why is the code so simple?**
-A: We believe in the KISS principle: Keep It Simple, Sailor.
-
-**Q: Why is the ASCII art so... extra?**
-A: Because if you're going to install a CLI tool, you deserve a *show*. We spent more time on the ASCII art than the actual code. No regrets.
-
-**Q: The installer asked for my token and I panicked. What now?**
-A: Run it again. We don't judge. The fifth time's the charm.
-
-**Q: Can GROG fetch pull requests too?**
-A: That sounds like a feature request. File an issue. We'll fetch it with GROG. It's the circle of life.
-
-**Q: Why are there pirates in my terminal?**
-A: You're asking the wrong questions, landlubber.
-
-## Troubleshooting
-
-### "ENOENT: no such file or directory"
-You're in the wrong folder. Classic.
-
-### "401 Unauthorized"
-Your token is either wrong, expired, or you copy-pasted with an extra space. We've all been there.
-
-### "The ASCII art looks weird"
-Your terminal font doesn't support our artistic vision. That's a *you* problem.
-
-### "It just... works?"
-I know. We're as surprised as you are.
-
-## Roadmap (Lies We Tell Ourselves)
-
-- [x] Download image attachments (done! we surprised ourselves)
-- [ ] Fetch pull requests (coming Soon™)
-- [ ] Support for GitLab (when someone pays us)
-- [ ] Even bigger ASCII art (the people demand it)
-- [ ] A GUI version (just kidding, we're not monsters)
-- [ ] World domination (Q4 2025, maybe Q1 2026)
-
-## Credits
-
-- **The Pirate Theme**: Blame sleep deprivation
-- **The ASCII Art**: Generated at 2 AM, refined at 3 AM, regretted at 9 AM
-- **The Name "GROG"**: First thing we thought of. We committed to the bit.
+**Q: Why is there a pirate theme?**
+A: Blame sleep deprivation and the fact that "grog" is a pirate drink.
 
 ## License
 
-ISC - which stands for "I Sincerely Can't believe you read this far"
+ISC
 
 ---
 
-*Made with ☕ and questionable life choices*
-
-*If this tool saved you 30 seconds, consider giving it a star. If it wasted your time, we're sorry (not really).*
+*Made with mass amounts of mass amounts of mass amounts of rum*
 
 ```
     _____
