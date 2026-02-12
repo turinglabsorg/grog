@@ -371,6 +371,7 @@ async function printIssueDetails(issue, owner, repo) {
   console.log("=".repeat(60));
   console.log(`Issue #${issue.number}: ${issue.title}`);
   console.log("=".repeat(60));
+  console.log(`URL: ${issue.html_url}`);
   console.log(`State: ${issue.state}`);
   console.log(`Author: ${issue.user?.login}`);
   console.log(`Created: ${new Date(issue.created_at).toLocaleString()}`);
@@ -494,6 +495,7 @@ async function handleExploreRepo(owner, repo) {
     console.log(`\n[${label}] (${issues.length} issues)`);
     issues.forEach((issue) => {
       console.log(`  #${issue.number}: ${issue.title}`);
+      console.log(`    ${issue.html_url}`);
     });
   }
 
@@ -501,6 +503,7 @@ async function handleExploreRepo(owner, repo) {
     console.log(`\n[unlabeled] (${unlabeled.length} issues)`);
     unlabeled.forEach((issue) => {
       console.log(`  #${issue.number}: ${issue.title}`);
+      console.log(`    ${issue.html_url}`);
     });
   }
 
@@ -514,6 +517,7 @@ async function handleExploreRepo(owner, repo) {
         ? ` [${issue.labels.map((l) => l.name).join(", ")}]`
         : "";
     console.log(`${index + 1}. #${issue.number}: ${issue.title}${labels}`);
+    console.log(`   ${issue.html_url}`);
   });
 
   console.log("\n" + "=".repeat(60));
@@ -640,7 +644,7 @@ Once the user selects, process each issue one by one:
 4. Move to the next issue
 
 Active issues:
-${activeIssues.length > 0 ? activeIssues.map((i) => `  ${i.owner}/${i.repo}#${i.number} ${i.title}`).join("\n") : "  (none)"}
+${activeIssues.length > 0 ? activeIssues.map((i) => `  ${i.owner}/${i.repo}#${i.number} ${i.title}\n    ${i.url}`).join("\n") : "  (none)"}
 `);
 }
 
