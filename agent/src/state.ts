@@ -1,5 +1,5 @@
 import { MongoClient, Collection } from "mongodb";
-import type { JobState } from "./types.js";
+import type { JobState, JobStatus, RepoConfig } from "./types.js";
 import type { OutputLine } from "./outputStore.js";
 import { createLogger } from "./logger.js";
 
@@ -13,13 +13,16 @@ interface JobLogDoc {
 export class StateManager {
   private collection: Collection<JobState>;
   private logsCollection: Collection<JobLogDoc>;
+  private repoConfigCollection: Collection<RepoConfig>;
 
   private constructor(
     collection: Collection<JobState>,
-    logsCollection: Collection<JobLogDoc>
+    logsCollection: Collection<JobLogDoc>,
+    repoConfigCollection: Collection<RepoConfig>
   ) {
     this.collection = collection;
     this.logsCollection = logsCollection;
+    this.repoConfigCollection = repoConfigCollection;
   }
 
   static async connect(uri: string): Promise<StateManager> {
@@ -28,6 +31,7 @@ export class StateManager {
     const db = client.db();
     const collection = db.collection<JobState>("jobs");
     const logsCollection = db.collection<JobLogDoc>("job_logs");
+    const repoConfigCollection = db.collection<RepoConfig>("repo_configs");
 
     // Create indexes
     await collection.createIndex(
@@ -40,8 +44,10 @@ export class StateManager {
 
     await logsCollection.createIndex({ jobId: 1 }, { unique: true });
 
+    await repoConfigCollection.createIndex({ id: 1 }, { unique: true });
+
     log.info("Connected to MongoDB");
-    return new StateManager(collection, logsCollection);
+    return new StateManager(collection, logsCollection, repoConfigCollection);
   }
 
   async getJob(
@@ -123,5 +129,98 @@ export class StateManager {
       { projection: { _id: 0 } }
     );
     return doc?.lines ?? [];
+  }
+
+  // --- Repo Config ---
+
+  async getRepoConfig(owner: string, repo: string): Promise<RepoConfig | undefined> {
+    const id = `${owner}/${repo}`;
+    const doc = await this.repoConfigCollection.findOne(
+      { id },
+      { projection: { _id: 0 } }
+    );
+    return doc ?? undefined;
+  }
+
+  async upsertRepoConfig(config: RepoConfig): Promise<void> {
+    await this.repoConfigCollection.updateOne(
+      { id: config.id },
+      { $set: config },
+      { upsert: true }
+    );
+  }
+
+  async listRepoConfigs(): Promise<RepoConfig[]> {
+    return this.repoConfigCollection.find({}, { projection: { _id: 0 } }).toArray();
+  }
+
+  async deleteRepoConfig(id: string): Promise<boolean> {
+    const result = await this.repoConfigCollection.deleteOne({ id });
+    return result.deletedCount > 0;
+  }
+
+  // --- Admin: bulk job operations ---
+
+  async bulkUpdateJobStatus(
+    filter: { status?: string; owner?: string; repo?: string },
+    newStatus: JobStatus
+  ): Promise<number> {
+    const query: Record<string, unknown> = {};
+    if (filter.status) query.status = filter.status;
+    if (filter.owner) query.owner = filter.owner;
+    if (filter.repo) query.repo = filter.repo;
+
+    const result = await this.collection.updateMany(query, {
+      $set: { status: newStatus, updatedAt: new Date().toISOString() },
+    });
+    return result.modifiedCount;
+  }
+
+  async purgeJobs(olderThanDays: number): Promise<number> {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = await this.collection.deleteMany({
+      status: { $in: ["completed", "failed", "closed"] },
+      updatedAt: { $lt: cutoff },
+    });
+
+    // Also purge associated logs
+    if (result.deletedCount > 0) {
+      const remainingJobIds = (await this.listJobs()).map((j) => j.id);
+      await this.logsCollection.deleteMany({
+        jobId: { $nin: remainingJobIds },
+      });
+    }
+
+    return result.deletedCount;
+  }
+
+  async getStats(): Promise<{
+    totalJobs: number;
+    byStatus: Record<string, number>;
+    byRepo: Record<string, number>;
+    totalTokens: { input: number; output: number };
+  }> {
+    const jobs = await this.listJobs();
+    const byStatus: Record<string, number> = {};
+    const byRepo: Record<string, number> = {};
+    let totalInput = 0;
+    let totalOutput = 0;
+
+    for (const job of jobs) {
+      byStatus[job.status] = (byStatus[job.status] ?? 0) + 1;
+      const repoKey = `${job.owner}/${job.repo}`;
+      byRepo[repoKey] = (byRepo[repoKey] ?? 0) + 1;
+      if (job.tokenUsage) {
+        totalInput += job.tokenUsage.inputTokens;
+        totalOutput += job.tokenUsage.outputTokens;
+      }
+    }
+
+    return {
+      totalJobs: jobs.length,
+      byStatus,
+      byRepo,
+      totalTokens: { input: totalInput, output: totalOutput },
+    };
   }
 }

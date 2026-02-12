@@ -9,7 +9,7 @@ import { getBuffer, subscribe } from "./outputStore.js";
 import { closeIssue, acceptRepoInvitations, fetchIssue } from "./github.js";
 import { createLogger } from "./logger.js";
 import { TokenBudget } from "./budget.js";
-import type { Config, JobStatus } from "./types.js";
+import type { Config, JobStatus, RepoConfig } from "./types.js";
 
 const log = createLogger("server");
 
@@ -225,6 +225,91 @@ async function main() {
     await state.upsertJob(job);
 
     res.json(job);
+  });
+
+  // --- Repo Config API ---
+
+  app.get("/repos", async (_req, res) => {
+    res.json(await state.listRepoConfigs());
+  });
+
+  app.get("/repos/:owner/:repo", async (req, res) => {
+    const config_ = await state.getRepoConfig(req.params.owner, req.params.repo);
+    if (!config_) {
+      res.status(404).json({ error: "No config for this repo" });
+      return;
+    }
+    res.json(config_);
+  });
+
+  app.put("/repos/:owner/:repo", async (req, res) => {
+    const owner = req.params.owner;
+    const repo = req.params.repo;
+    const id = `${owner}/${repo}`;
+    const body = req.body as Partial<RepoConfig>;
+
+    const existing = await state.getRepoConfig(owner, repo);
+    const now = new Date().toISOString();
+
+    const repoConfig: RepoConfig = {
+      id,
+      owner,
+      repo,
+      enabled: body.enabled ?? existing?.enabled ?? true,
+      autoSolve: body.autoSolve ?? existing?.autoSolve ?? false,
+      includeLabels: body.includeLabels ?? existing?.includeLabels ?? [],
+      excludeLabels: body.excludeLabels ?? existing?.excludeLabels ?? [],
+      allowedUsers: body.allowedUsers ?? existing?.allowedUsers ?? [],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    await state.upsertRepoConfig(repoConfig);
+    log.info(`Repo config updated: ${id}`);
+    res.json(repoConfig);
+  });
+
+  app.delete("/repos/:owner/:repo", async (req, res) => {
+    const id = `${req.params.owner}/${req.params.repo}`;
+    const deleted = await state.deleteRepoConfig(id);
+    if (!deleted) {
+      res.status(404).json({ error: "No config for this repo" });
+      return;
+    }
+    res.json({ deleted: true, id });
+  });
+
+  // --- Admin API ---
+
+  app.get("/admin/stats", async (_req, res) => {
+    res.json(await state.getStats());
+  });
+
+  app.post("/admin/jobs/bulk-update", async (req, res) => {
+    const { filter, status } = req.body as {
+      filter: { status?: string; owner?: string; repo?: string };
+      status: string;
+    };
+
+    if (!status || !["queued", "completed", "failed", "closed"].includes(status)) {
+      res.status(400).json({ error: `Invalid target status: ${status}` });
+      return;
+    }
+
+    const count = await state.bulkUpdateJobStatus(filter ?? {}, status as JobStatus);
+    log.info(`Bulk update: ${count} jobs → ${status}`);
+    res.json({ updated: count, status });
+  });
+
+  app.delete("/admin/jobs", async (req, res) => {
+    const days = parseInt(req.query.olderThanDays as string, 10);
+    if (isNaN(days) || days < 1) {
+      res.status(400).json({ error: "olderThanDays must be >= 1" });
+      return;
+    }
+    const count = await state.purgeJobs(days);
+    log.info(`Purged ${count} old jobs (older than ${days} days)`);
+    res.json({ purged: count, olderThanDays: days });
   });
 
   // Dashboard

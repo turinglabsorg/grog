@@ -112,6 +112,35 @@ export interface Config {
   hourlyTokenBudget: number;
 }
 
+// --- Repo Config ---
+
+export interface RepoConfig {
+  /** e.g. "turinglabsorg/website" */
+  id: string;
+  owner: string;
+  repo: string;
+  enabled: boolean;
+  /** Auto-solve new issues without @mention */
+  autoSolve: boolean;
+  /** Only process issues with these labels (empty = all) */
+  includeLabels: string[];
+  /** Ignore issues with these labels */
+  excludeLabels: string[];
+  /** Only these GitHub users can trigger the bot (empty = anyone) */
+  allowedUsers: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// --- Issues Webhook Payload ---
+
+export interface IssuesPayload {
+  action: string;
+  issue: Issue;
+  repository: Repository;
+  sender: User;
+}
+
 // --- Pull Request Webhook Payload ---
 
 export interface PullRequestPayload {

@@ -4,13 +4,57 @@ import type {
   Config,
   WebhookPayload,
   PullRequestPayload,
+  IssuesPayload,
   QueuedJob,
+  RepoConfig,
 } from "./types.js";
 import { JobQueue } from "./queue.js";
 import { StateManager } from "./state.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("webhook");
+
+function shouldProcess(
+  repoConfig: RepoConfig | undefined,
+  labels: { name: string }[],
+  senderLogin: string
+): { allowed: boolean; reason?: string } {
+  // No config = allow everything (backwards compatible)
+  if (!repoConfig) return { allowed: true };
+
+  if (!repoConfig.enabled) {
+    return { allowed: false, reason: "Repo is disabled" };
+  }
+
+  // Check allowed users
+  if (repoConfig.allowedUsers.length > 0 && !repoConfig.allowedUsers.includes(senderLogin)) {
+    return { allowed: false, reason: `User ${senderLogin} not in allowedUsers` };
+  }
+
+  const labelNames = labels.map((l) => l.name.toLowerCase());
+
+  // Check exclude labels
+  if (repoConfig.excludeLabels.length > 0) {
+    const excluded = repoConfig.excludeLabels.find((el) =>
+      labelNames.includes(el.toLowerCase())
+    );
+    if (excluded) {
+      return { allowed: false, reason: `Excluded label: ${excluded}` };
+    }
+  }
+
+  // Check include labels (empty = allow all)
+  if (repoConfig.includeLabels.length > 0) {
+    const hasInclude = repoConfig.includeLabels.some((il) =>
+      labelNames.includes(il.toLowerCase())
+    );
+    if (!hasInclude) {
+      return { allowed: false, reason: "No matching includeLabels" };
+    }
+  }
+
+  return { allowed: true };
+}
 
 export function verifySignature(
   payload: string,
@@ -79,6 +123,15 @@ async function handleIssueComment(
     return;
   }
 
+  // Check repo config
+  const repoConfig = await state.getRepoConfig(owner, repo);
+  const check = shouldProcess(repoConfig, payload.issue.labels, payload.comment.user.login);
+  if (!check.allowed) {
+    log.info(`Skipping ${owner}/${repo}#${issueNumber}: ${check.reason}`);
+    res.status(200).json({ ignored: true, reason: check.reason });
+    return;
+  }
+
   const job: QueuedJob = {
     owner,
     repo,
@@ -135,6 +188,57 @@ async function handlePullRequestEvent(
   res.status(200).json({ completed: true, job: job.id });
 }
 
+async function handleIssuesEvent(
+  payload: IssuesPayload,
+  config: Config,
+  queue: JobQueue,
+  state: StateManager,
+  res: Response
+): Promise<void> {
+  // Only handle newly opened issues
+  if (payload.action !== "opened") {
+    res.status(200).json({ ignored: true, reason: `Issues action: ${payload.action}` });
+    return;
+  }
+
+  // Skip PRs
+  if (payload.issue.pull_request) {
+    res.status(200).json({ ignored: true, reason: "Pull request, not issue" });
+    return;
+  }
+
+  const owner = payload.repository.owner.login;
+  const repo = payload.repository.name;
+
+  // Check repo config — must have autoSolve enabled
+  const repoConfig = await state.getRepoConfig(owner, repo);
+  if (!repoConfig || !repoConfig.autoSolve) {
+    res.status(200).json({ ignored: true, reason: "autoSolve not enabled for this repo" });
+    return;
+  }
+
+  const check = shouldProcess(repoConfig, payload.issue.labels, payload.sender.login);
+  if (!check.allowed) {
+    log.info(`Skipping auto-solve ${owner}/${repo}#${payload.issue.number}: ${check.reason}`);
+    res.status(200).json({ ignored: true, reason: check.reason });
+    return;
+  }
+
+  log.info(`Auto-solving new issue ${owner}/${repo}#${payload.issue.number}`);
+
+  const job: QueuedJob = {
+    owner,
+    repo,
+    issueNumber: payload.issue.number,
+    commentId: 0, // No triggering comment for auto-solve
+    commentBody: "",
+    defaultBranch: payload.repository.default_branch,
+  };
+
+  queue.enqueue(job);
+  res.status(202).json({ queued: true, autoSolve: true, issue: `${owner}/${repo}#${payload.issue.number}` });
+}
+
 export function createWebhookHandler(
   config: Config,
   queue: JobQueue,
@@ -156,6 +260,14 @@ export function createWebhookHandler(
     if (event === "issue_comment") {
       await handleIssueComment(
         req.body as WebhookPayload,
+        config,
+        queue,
+        state,
+        res
+      );
+    } else if (event === "issues") {
+      await handleIssuesEvent(
+        req.body as IssuesPayload,
         config,
         queue,
         state,

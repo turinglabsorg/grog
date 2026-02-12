@@ -34,6 +34,16 @@
 
 ## Phase 3 — Multi-repo & Org-wide
 
-- [ ] Org-level webhook support (single endpoint for all repos)
-- [ ] Per-repo configuration (which issues to auto-solve, labels to filter)
-- [ ] Admin API for bulk job management
+- [x] Org-level webhook support (handles `issues` event for auto-solve on new issues)
+- [x] Per-repo configuration (enabled, autoSolve, include/exclude labels, allowedUsers)
+- [x] Admin API (bulk status updates, stats, purge old jobs)
+- [x] Repo config CRUD API (`PUT/GET/DELETE /repos/:owner/:repo`)
+
+## Phase 4 — Polish & Scale
+
+- [ ] Dashboard: repo config management UI (add/edit repos, toggle autoSolve)
+- [ ] Dashboard: admin stats panel (total tokens, jobs by repo)
+- [ ] Webhook replay / manual trigger API
+- [ ] Multi-webhook-secret support (per-org secrets)
+- [ ] Job priority levels (urgent labels get processed first)
+- [ ] Slack/Discord notifications on job completion

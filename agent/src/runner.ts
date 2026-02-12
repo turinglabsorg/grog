@@ -287,14 +287,16 @@ export async function runAgent(
   await state.upsertJob(jobState);
 
   try {
-    // Add eyes reaction to the triggering comment
-    await addReaction(
-      job.owner,
-      job.repo,
-      job.commentId,
-      "eyes",
-      config
-    );
+    // Add eyes reaction to the triggering comment (skip for auto-solve)
+    if (job.commentId > 0) {
+      await addReaction(
+        job.owner,
+        job.repo,
+        job.commentId,
+        "eyes",
+        config
+      );
+    }
 
     // Clone repo
     logLine({ ts: Date.now(), type: "status", content: "Cloning repository" });
@@ -439,14 +441,16 @@ export async function runAgent(
         config
       );
 
-      // Add rocket reaction
-      await addReaction(
-        job.owner,
-        job.repo,
-        job.commentId,
-        "rocket",
-        config
-      );
+      // Add rocket reaction (skip for auto-solve)
+      if (job.commentId > 0) {
+        await addReaction(
+          job.owner,
+          job.repo,
+          job.commentId,
+          "rocket",
+          config
+        );
+      }
 
       // Update state
       jobState.status = "pr_opened";
