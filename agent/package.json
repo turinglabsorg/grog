@@ -1,0 +1,23 @@
+{
+  "name": "grog-agent",
+  "version": "1.0.0",
+  "description": "Grog webhook agent server — reacts to GitHub events and spawns Claude Code agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongodb": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.12.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
