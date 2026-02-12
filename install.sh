@@ -35,6 +35,7 @@ echo -e "${BOLD}[1/5]${NC} creating directories..."
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
 mkdir -p "$SKILLS_DIR/grog-explore"
+mkdir -p "$SKILLS_DIR/grog-review"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo "  > $TOOLS_DIR"
@@ -188,6 +189,63 @@ EOF
 
 echo "  > /grog-explore skill"
 
+# Skill 3: /grog-review - Review a pull request
+cat > "$SKILLS_DIR/grog-review/SKILL.md" << 'EOF'
+---
+name: grog-review
+description: Review a GitHub pull request. Use when the user provides a GitHub PR URL or asks to review a pull request.
+allowed-tools: Bash, Read
+argument-hint: <github-pr-url>
+---
+
+# GROG Review - GitHub PR Code Reviewer
+
+Fetch a GitHub pull request and perform a thorough code review.
+
+## Usage
+
+When the user provides a GitHub PR URL (like `https://github.com/owner/repo/pull/123`), run:
+
+```bash
+node ~/.claude/tools/grog/index.js review $ARGUMENTS
+```
+
+The tool fetches the PR metadata, full diff, file list, existing reviews, inline comments, and conversation comments. It also downloads any image attachments from the PR description.
+
+## IMPORTANT: Analyze Image Attachments
+
+If the output shows "IMAGE ATTACHMENTS" with file paths, you MUST use the Read tool to view each image file. These screenshots/mockups may be critical for understanding the PR's visual changes. Do this before starting the review.
+
+## What to do with the output
+
+1. Run grog review to fetch the PR
+2. If image paths are shown, use Read tool on EACH image file to view them
+3. Summarize the PR: title, author, branch, description, and scope of changes
+4. Review the diff thoroughly, checking for:
+   - **Correctness**: Logic errors, edge cases, off-by-one errors, null/undefined handling
+   - **Security**: Injection vulnerabilities, exposed secrets, unsafe data handling
+   - **Performance**: Unnecessary re-renders, N+1 queries, missing memoization, large bundle additions
+   - **Code quality**: Naming, readability, DRY violations, dead code, missing error handling
+   - **Architecture**: Does it fit existing patterns? Are there better abstractions?
+   - **Testing**: Are changes tested? Are there missing test cases?
+   - **Types**: Missing or incorrect TypeScript types, unsafe `any` usage
+5. Consider the existing review comments and reviews - note what has already been flagged
+6. Provide a structured review with:
+   - **Summary**: One-paragraph overview of what the PR does and its overall quality
+   - **Key findings**: Organized by severity (critical, suggestion, nit)
+   - **File-by-file notes**: Specific line references for actionable feedback
+   - **Verdict**: APPROVE, REQUEST_CHANGES, or COMMENT with reasoning
+
+Be constructive and specific. Reference line numbers and file paths. Suggest concrete fixes when flagging issues.
+
+## Error Handling
+
+- If no URL is provided, ask the user for the GitHub PR URL
+- If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
+EOF
+
+echo -e "  ${GREEN}✓${NC} Created /grog-review skill"
+
 echo ""
 echo "┌──────────────────────────────────────────────────────────┐"
 echo "│  installation complete.                                  │"
@@ -197,11 +255,13 @@ echo "  commands available in any Claude Code session:"
 echo ""
 echo "    /grog-solve <issue-url>     fetch and solve a single issue"
 echo "    /grog-explore <repo-url>    list all issues for batch processing"
+echo "    /grog-review <pr-url>       review a pull request"
 echo ""
 echo "  examples:"
 echo "    /grog-solve https://github.com/owner/repo/issues/123"
 echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
 echo "    /grog-explore https://github.com/owner/repo"
+echo "    /grog-review https://github.com/owner/repo/pull/123"
 echo ""
 echo "  files:"
 echo "    tool:   $TOOLS_DIR"

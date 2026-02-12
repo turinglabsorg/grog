@@ -33,6 +33,21 @@ function parseGitHubIssueUrl(url) {
 }
 
 /**
+ * Parse GitHub pull request URL
+ * @param {string} url - GitHub PR URL like https://github.com/owner/repo/pull/123
+ * @returns {{ owner: string, repo: string, prNumber: string } | null}
+ */
+function parseGitHubPrUrl(url) {
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (!match) return null;
+  return {
+    owner: match[1],
+    repo: match[2],
+    prNumber: match[3],
+  };
+}
+
+/**
  * Parse GitHub project/repo URL
  * @param {string} url - GitHub URL like https://github.com/owner/repo or https://github.com/orgs/org/projects/123
  * @returns {{ type: 'repo', owner: string, repo: string } | { type: 'project', owner: string, projectNumber: number, isOrg: boolean } | null}
@@ -279,6 +294,173 @@ async function fetchProjectItems(owner, projectNumber, isOrg) {
   // Return combined result
   projectData.items.nodes = allItems;
   return projectData;
+}
+
+/**
+ * Fetch pull request details from GitHub API
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} prNumber
+ */
+async function fetchPullRequest(owner, repo, prNumber) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `GitHub API error: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Fetch pull request diff from GitHub API
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} prNumber
+ */
+async function fetchPullRequestDiff(owner, repo, prNumber) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: "application/vnd.github.v3.diff",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `GitHub API error: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  return response.text();
+}
+
+/**
+ * Fetch pull request files (with patch) from GitHub API
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} prNumber
+ */
+async function fetchPullRequestFiles(owner, repo, prNumber) {
+  const allFiles = [];
+  let page = 1;
+
+  while (true) {
+    const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`;
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${GH_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API error: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const files = await response.json();
+    if (files.length === 0) break;
+    allFiles.push(...files);
+    if (files.length < 100) break;
+    page++;
+  }
+
+  return allFiles;
+}
+
+/**
+ * Fetch pull request review comments (inline code comments) from GitHub API
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} prNumber
+ */
+async function fetchPullRequestReviewComments(owner, repo, prNumber) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `GitHub API error: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Fetch pull request issue comments (conversation comments) from GitHub API
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} prNumber
+ */
+async function fetchPullRequestIssueComments(owner, repo, prNumber) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `GitHub API error: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  return response.json();
+}
+
+/**
+ * Fetch pull request reviews (review decisions) from GitHub API
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} prNumber
+ */
+async function fetchPullRequestReviews(owner, repo, prNumber) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `GitHub API error: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  return response.json();
 }
 
 /**
@@ -679,6 +861,188 @@ ${activeIssues.length > 0 ? activeIssues.map((i) => `  ${i.owner}/${i.repo}#${i.
 }
 
 /**
+ * Print PR details with all context for review
+ */
+async function printPrDetails(pr, files, reviewComments, issueComments, reviews, diff, owner, repo) {
+  console.log("=".repeat(60));
+  console.log(`PR #${pr.number}: ${pr.title}`);
+  console.log("=".repeat(60));
+  console.log(`State: ${pr.state}`);
+  console.log(`Author: ${pr.user?.login}`);
+  console.log(`Created: ${new Date(pr.created_at).toLocaleString()}`);
+  console.log(`Updated: ${new Date(pr.updated_at).toLocaleString()}`);
+  console.log(`Branch: ${pr.head?.ref} → ${pr.base?.ref}`);
+  console.log(`Mergeable: ${pr.mergeable ?? "unknown"}`);
+  if (pr.labels?.length > 0) {
+    console.log(`Labels: ${pr.labels.map((l) => l.name).join(", ")}`);
+  }
+  if (pr.requested_reviewers?.length > 0) {
+    console.log(`Requested Reviewers: ${pr.requested_reviewers.map((r) => r.login).join(", ")}`);
+  }
+  console.log(`Changes: +${pr.additions} -${pr.deletions} across ${pr.changed_files} file(s)`);
+  console.log(`URL: ${pr.html_url}`);
+
+  // PR description
+  console.log("\n" + "-".repeat(60));
+  console.log("DESCRIPTION:");
+  console.log("-".repeat(60));
+  console.log(pr.body || "(No description provided)");
+
+  // Linked issues (extract from body)
+  const issueRefs = (pr.body || "").match(/(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi);
+  if (issueRefs) {
+    console.log("\n" + "-".repeat(60));
+    console.log("LINKED ISSUES:");
+    console.log("-".repeat(60));
+    issueRefs.forEach((ref) => console.log(`  ${ref}`));
+  }
+
+  // File summary
+  console.log("\n" + "-".repeat(60));
+  console.log("FILES CHANGED:");
+  console.log("-".repeat(60));
+  files.forEach((file) => {
+    const statusIcon =
+      file.status === "added" ? "+" :
+      file.status === "removed" ? "-" :
+      file.status === "renamed" ? "→" : "~";
+    const rename = file.previous_filename ? ` (was: ${file.previous_filename})` : "";
+    console.log(`  [${statusIcon}] ${file.filename}${rename}  (+${file.additions} -${file.deletions})`);
+  });
+
+  // Reviews
+  if (reviews.length > 0) {
+    console.log("\n" + "-".repeat(60));
+    console.log("REVIEWS:");
+    console.log("-".repeat(60));
+    reviews.forEach((review) => {
+      if (review.state === "PENDING") return;
+      const date = new Date(review.submitted_at).toLocaleString();
+      console.log(`  ${review.user?.login}: ${review.state} (${date})`);
+      if (review.body) {
+        console.log(`    "${review.body}"`);
+      }
+    });
+  }
+
+  // Review comments (inline code comments)
+  if (reviewComments.length > 0) {
+    console.log("\n" + "-".repeat(60));
+    console.log("INLINE REVIEW COMMENTS:");
+    console.log("-".repeat(60));
+    reviewComments.forEach((comment) => {
+      const line = comment.line || comment.original_line || "?";
+      console.log(`\n  ${comment.user?.login} on ${comment.path}:${line}`);
+      console.log(`  ${comment.body}`);
+      if (comment.diff_hunk) {
+        console.log(`  Context:`);
+        console.log(`  ${comment.diff_hunk.split("\n").slice(-3).join("\n  ")}`);
+      }
+    });
+  }
+
+  // Conversation comments (non-bot only, bots are usually deploy previews etc.)
+  const humanComments = issueComments.filter(
+    (c) => !c.user?.login?.includes("[bot]") && c.user?.type !== "Bot" && !c.performed_via_github_app,
+  );
+  if (humanComments.length > 0) {
+    console.log("\n" + "-".repeat(60));
+    console.log("CONVERSATION COMMENTS:");
+    console.log("-".repeat(60));
+    humanComments.forEach((comment) => {
+      const date = new Date(comment.created_at).toLocaleString();
+      console.log(`\n  ${comment.user?.login} (${date}):`);
+      console.log(`  ${comment.body}`);
+    });
+  }
+
+  // Full diff
+  console.log("\n" + "=".repeat(60));
+  console.log("FULL DIFF:");
+  console.log("=".repeat(60));
+  console.log(diff);
+
+  // Download images from PR body
+  const imageUrls = extractImageUrls(pr.body);
+  if (imageUrls.length > 0) {
+    console.log(
+      `\nFound ${imageUrls.length} image attachment(s) in PR description. Downloading...\n`,
+    );
+
+    const outputDir = "/tmp/grog-attachments";
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
+
+    const downloadedFiles = [];
+
+    for (let i = 0; i < imageUrls.length; i++) {
+      const url = imageUrls[i];
+      try {
+        const tempPath = join(outputDir, `temp-${Date.now()}-${i}`);
+        const { contentType, size } = await downloadImage(url, tempPath);
+        const ext = getExtension(contentType);
+        const filename = `${repo}-pr-${pr.number}-img-${i + 1}.${ext}`;
+        const finalPath = join(outputDir, filename);
+        renameSync(tempPath, finalPath);
+        console.log(
+          `  Downloaded: ${finalPath} (${(size / 1024).toFixed(1)} KB)`,
+        );
+        downloadedFiles.push(finalPath);
+      } catch (err) {
+        console.error(`  Failed to download image ${i + 1}: ${err.message}`);
+      }
+    }
+
+    if (downloadedFiles.length > 0) {
+      console.log("\n" + "=".repeat(60));
+      console.log("IMAGE ATTACHMENTS (use Read tool to analyze these):");
+      console.log("=".repeat(60));
+      downloadedFiles.forEach((f) => console.log(f));
+    }
+  }
+}
+
+/**
+ * Handle 'review' command - fetch PR details for code review
+ */
+async function handleReview(prUrl) {
+  const parsed = parseGitHubPrUrl(prUrl);
+  if (!parsed) {
+    console.error("Error: Invalid GitHub pull request URL");
+    console.error(
+      "Expected format: https://github.com/owner/repo/pull/123",
+    );
+    process.exit(1);
+  }
+
+  try {
+    console.log(
+      `Fetching PR #${parsed.prNumber} from ${parsed.owner}/${parsed.repo}...\n`,
+    );
+
+    // Fetch all PR data in parallel
+    const [pr, files, reviewComments, issueComments, reviews, diff] =
+      await Promise.all([
+        fetchPullRequest(parsed.owner, parsed.repo, parsed.prNumber),
+        fetchPullRequestFiles(parsed.owner, parsed.repo, parsed.prNumber),
+        fetchPullRequestReviewComments(parsed.owner, parsed.repo, parsed.prNumber),
+        fetchPullRequestIssueComments(parsed.owner, parsed.repo, parsed.prNumber),
+        fetchPullRequestReviews(parsed.owner, parsed.repo, parsed.prNumber),
+        fetchPullRequestDiff(parsed.owner, parsed.repo, parsed.prNumber),
+      ]);
+
+    await printPrDetails(
+      pr, files, reviewComments, issueComments, reviews, diff,
+      parsed.owner, parsed.repo,
+    );
+  } catch (error) {
+    console.error("Error fetching PR:", error.message);
+    process.exit(1);
+  }
+}
+
+/**
  * Handle 'explore' command - list issues from a project or repo for batch processing
  */
 async function handleExplore(url) {
@@ -722,11 +1086,13 @@ async function main() {
     console.log("  usage:");
     console.log("    grog solve <issue-url>       fetch and solve a single issue");
     console.log("    grog explore <project-url>   list all issues for batch processing");
+    console.log("    grog review <pr-url>         fetch PR details for code review");
     console.log("");
     console.log("  examples:");
     console.log("    grog solve https://github.com/owner/repo/issues/123");
     console.log("    grog explore https://github.com/owner/repo");
     console.log("    grog explore https://github.com/orgs/myorg/projects/1");
+    console.log("    grog review https://github.com/owner/repo/pull/123");
     console.log("");
     process.exit(1);
   }
@@ -750,15 +1116,26 @@ async function main() {
       await handleExplore(url);
       break;
 
+    case "review":
+      if (!url) {
+        console.error("Error: Missing PR URL");
+        console.log("Usage: grog review <github-pr-url>");
+        process.exit(1);
+      }
+      await handleReview(url);
+      break;
+
     default:
-      // Backwards compatibility: if the argument looks like an issue URL, treat it as 'solve'
+      // Backwards compatibility: if the argument looks like a URL, auto-detect command
       if (command.includes("github.com") && command.includes("/issues/")) {
         await handleSolve(command);
+      } else if (command.includes("github.com") && command.includes("/pull/")) {
+        await handleReview(command);
       } else if (command.includes("github.com")) {
         await handleExplore(command);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore");
+        console.log("  available: solve, explore, review");
         process.exit(1);
       }
   }
