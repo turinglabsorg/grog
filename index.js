@@ -3,7 +3,16 @@
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { writeFileSync, mkdirSync, existsSync, renameSync } from "fs";
+import {
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  renameSync,
+  appendFileSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "fs";
 
 // Load .env from the package directory
 const __filename = fileURLToPath(import.meta.url);
@@ -15,6 +24,36 @@ const GH_TOKEN = process.env.GH_TOKEN;
 if (!GH_TOKEN) {
   console.error("Error: GH_TOKEN not found in .env file");
   process.exit(1);
+}
+
+// Logging directory for worker activity
+const LOGS_DIR = "/tmp/grog-logs";
+
+/**
+ * Get log file path for an issue
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string|number} issueNumber
+ * @returns {string}
+ */
+function getLogPath(owner, repo, issueNumber) {
+  return join(LOGS_DIR, `${owner}-${repo}-issue-${issueNumber}.log`);
+}
+
+/**
+ * Write a log entry for an issue worker
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string|number} issueNumber
+ * @param {string} message
+ */
+function writeLog(owner, repo, issueNumber, message) {
+  if (!existsSync(LOGS_DIR)) {
+    mkdirSync(LOGS_DIR, { recursive: true });
+  }
+  const logPath = getLogPath(owner, repo, issueNumber);
+  const timestamp = new Date().toISOString();
+  appendFileSync(logPath, `[${timestamp}] ${message}\n`);
 }
 
 /**
@@ -436,6 +475,12 @@ async function handleSolve(issueUrl) {
   }
 
   try {
+    writeLog(
+      parsed.owner,
+      parsed.repo,
+      parsed.issueNumber,
+      "Worker started - fetching issue details",
+    );
     console.log(
       `Fetching issue #${parsed.issueNumber} from ${parsed.owner}/${parsed.repo}...\n`,
     );
@@ -444,8 +489,38 @@ async function handleSolve(issueUrl) {
       parsed.repo,
       parsed.issueNumber,
     );
+    writeLog(
+      parsed.owner,
+      parsed.repo,
+      parsed.issueNumber,
+      `Fetched issue: "${issue.title}" (state: ${issue.state})`,
+    );
     await printIssueDetails(issue, parsed.owner, parsed.repo);
+
+    const imageUrls = extractImageUrls(issue.body);
+    if (imageUrls.length > 0) {
+      writeLog(
+        parsed.owner,
+        parsed.repo,
+        parsed.issueNumber,
+        `Downloaded ${imageUrls.length} image attachment(s)`,
+      );
+    }
+    writeLog(
+      parsed.owner,
+      parsed.repo,
+      parsed.issueNumber,
+      "Worker completed - issue details displayed",
+    );
   } catch (error) {
+    if (parsed) {
+      writeLog(
+        parsed.owner,
+        parsed.repo,
+        parsed.issueNumber,
+        `Error: ${error.message}`,
+      );
+    }
     console.error("Error fetching issue:", error.message);
     process.exit(1);
   }
@@ -455,9 +530,16 @@ async function handleSolve(issueUrl) {
  * Handle 'explore' command for a repository
  */
 async function handleExploreRepo(owner, repo) {
+  writeLog(owner, repo, "explore", "Exploring repository issues");
   console.log(`Fetching issues from ${owner}/${repo}...\n`);
 
   const openIssues = await fetchIssues(owner, repo, "open");
+  writeLog(
+    owner,
+    repo,
+    "explore",
+    `Found ${openIssues.length} open issue(s)`,
+  );
 
   if (openIssues.length === 0) {
     console.log("No open issues found in this repository.");
@@ -540,6 +622,12 @@ Repository URL for issues: https://github.com/${owner}/${repo}/issues/
  */
 async function handleExploreProject(owner, projectNumber, isOrg) {
   const projectType = isOrg ? "organization" : "user";
+  writeLog(
+    owner,
+    `project-${projectNumber}`,
+    "explore",
+    `Exploring ${projectType} project #${projectNumber}`,
+  );
   console.log(
     `Fetching project #${projectNumber} from ${projectType} ${owner}...\n`,
   );
@@ -679,6 +767,161 @@ async function handleExplore(url) {
 }
 
 /**
+ * Handle 'logs' command - view recent worker logs for an issue
+ */
+function handleLogs(identifier, lines) {
+  if (!existsSync(LOGS_DIR)) {
+    console.log("No logs found. Workers haven't run yet.");
+    process.exit(0);
+  }
+
+  // If identifier is "--all" or not provided, list all log files
+  if (!identifier || identifier === "--all") {
+    const files = readdirSync(LOGS_DIR)
+      .filter((f) => f.endsWith(".log"))
+      .map((f) => {
+        const filePath = join(LOGS_DIR, f);
+        const stats = statSync(filePath);
+        return { name: f, mtime: stats.mtime, size: stats.size };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+
+    if (files.length === 0) {
+      console.log("No logs found.");
+      process.exit(0);
+    }
+
+    console.log("=".repeat(60));
+    console.log("GROG WORKER LOGS");
+    console.log("=".repeat(60));
+    console.log(`\nFound ${files.length} log file(s) in ${LOGS_DIR}:\n`);
+
+    files.forEach((f) => {
+      const issueId = f.name.replace(".log", "");
+      const age = getTimeAgo(f.mtime);
+      console.log(`  ${issueId}`);
+      console.log(
+        `    Last updated: ${age} (${f.mtime.toLocaleString()})`,
+      );
+      console.log(`    Size: ${(f.size / 1024).toFixed(1)} KB`);
+      console.log("");
+    });
+
+    console.log("-".repeat(60));
+    console.log("To view logs for a specific issue:");
+    console.log("  grog logs <owner/repo#number>");
+    console.log("  grog logs <github-issue-url>");
+    console.log("  grog logs <owner-repo-issue-number>");
+    process.exit(0);
+  }
+
+  // Parse the identifier to find the log file
+  const logPath = resolveLogPath(identifier);
+  if (!logPath) {
+    console.error(`No logs found for: ${identifier}`);
+    console.error("");
+    console.error("Try one of these formats:");
+    console.error("  grog logs owner/repo#123");
+    console.error(
+      "  grog logs https://github.com/owner/repo/issues/123",
+    );
+    console.error("  grog logs owner-repo-issue-123");
+    console.error("  grog logs --all    (list all log files)");
+    process.exit(1);
+  }
+
+  if (!existsSync(logPath)) {
+    console.error(`No logs found for: ${identifier}`);
+    console.error(`Expected log file: ${logPath}`);
+    process.exit(1);
+  }
+
+  const content = readFileSync(logPath, "utf-8");
+  const allLines = content.trim().split("\n");
+  const maxLines = lines || 50;
+  const displayLines = allLines.slice(-maxLines);
+
+  const logName = logPath
+    .replace(LOGS_DIR + "/", "")
+    .replace(".log", "");
+
+  console.log("=".repeat(60));
+  console.log(`WORKER LOGS: ${logName}`);
+  console.log("=".repeat(60));
+  console.log(`Log file: ${logPath}`);
+  console.log(`Total entries: ${allLines.length}`);
+  if (allLines.length > maxLines) {
+    console.log(
+      `Showing last ${maxLines} entries (use --lines=N for more)`,
+    );
+  }
+  console.log("-".repeat(60));
+  console.log("");
+  displayLines.forEach((line) => console.log(line));
+  console.log("");
+  console.log("=".repeat(60));
+}
+
+/**
+ * Resolve a log file path from various identifier formats
+ * @param {string} identifier - Could be owner/repo#123, a URL, or owner-repo-issue-123
+ * @returns {string|null}
+ */
+function resolveLogPath(identifier) {
+  // Try as GitHub issue URL
+  const urlParsed = parseGitHubIssueUrl(identifier);
+  if (urlParsed) {
+    return getLogPath(urlParsed.owner, urlParsed.repo, urlParsed.issueNumber);
+  }
+
+  // Try as owner/repo#number format
+  const shortMatch = identifier.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+  if (shortMatch) {
+    return getLogPath(shortMatch[1], shortMatch[2], shortMatch[3]);
+  }
+
+  // Try as owner-repo-issue-number format (log file name)
+  const logNameMatch = identifier.match(/^(.+)-(.+)-issue-(\d+)$/);
+  if (logNameMatch) {
+    return getLogPath(logNameMatch[1], logNameMatch[2], logNameMatch[3]);
+  }
+
+  // Try as a plain issue number - search for matching log files
+  if (/^\d+$/.test(identifier) && existsSync(LOGS_DIR)) {
+    const files = readdirSync(LOGS_DIR).filter(
+      (f) => f.endsWith(`-issue-${identifier}.log`),
+    );
+    if (files.length === 1) {
+      return join(LOGS_DIR, files[0]);
+    }
+    if (files.length > 1) {
+      console.log(`Multiple logs found for issue #${identifier}:`);
+      files.forEach((f) => console.log(`  ${f.replace(".log", "")}`));
+      console.log("\nPlease use the full identifier (e.g., owner/repo#" + identifier + ")");
+      process.exit(1);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get a human-readable time ago string
+ * @param {Date} date
+ * @returns {string}
+ */
+function getTimeAgo(date) {
+  const seconds = Math.floor((new Date() - date) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+/**
  * Main function
  */
 async function main() {
@@ -693,11 +936,19 @@ async function main() {
     console.log(
       "  grog explore <github-project-url>  - List all issues for batch processing",
     );
+    console.log(
+      "  grog logs [issue-id]               - View recent worker logs",
+    );
     console.log("");
     console.log("Examples:");
     console.log("  grog solve https://github.com/owner/repo/issues/123");
     console.log("  grog explore https://github.com/owner/repo");
     console.log("  grog explore https://github.com/orgs/myorg/projects/1");
+    console.log("  grog logs --all");
+    console.log("  grog logs owner/repo#123");
+    console.log(
+      "  grog logs https://github.com/owner/repo/issues/123",
+    );
     process.exit(1);
   }
 
@@ -719,6 +970,16 @@ async function main() {
       }
       await handleExplore(url);
       break;
+
+    case "logs": {
+      const linesArg = process.argv[4];
+      let lines;
+      if (linesArg && linesArg.startsWith("--lines=")) {
+        lines = parseInt(linesArg.split("=")[1], 10);
+      }
+      handleLogs(url, lines);
+      break;
+    }
 
     default:
       // Backwards compatibility: if the argument looks like an issue URL, treat it as 'solve'

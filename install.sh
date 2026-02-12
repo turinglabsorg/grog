@@ -34,6 +34,7 @@ echo -e "${CYAN}[1/5]${NC} Creating directories..."
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
 mkdir -p "$SKILLS_DIR/grog-explore"
+mkdir -p "$SKILLS_DIR/grog-logs"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo -e "  ${GREEN}✓${NC} Created $TOOLS_DIR"
@@ -187,6 +188,54 @@ EOF
 
 echo -e "  ${GREEN}✓${NC} Created /grog-explore skill"
 
+# Skill 3: /grog-logs - View worker logs for an issue
+cat > "$SKILLS_DIR/grog-logs/SKILL.md" << 'EOF'
+---
+name: grog-logs
+description: View recent worker logs for a GitHub issue. Use when the user wants to check what a grog worker is doing or has done for a specific issue.
+allowed-tools: Bash
+argument-hint: <issue-id-or-url>
+---
+
+# GROG Logs - Worker Activity Viewer
+
+View recent logs from grog workers to see what they've been doing for a specific issue.
+
+## Usage
+
+```bash
+# List all worker logs
+node ~/.claude/tools/grog/index.js logs --all
+
+# View logs for a specific issue (multiple formats supported)
+node ~/.claude/tools/grog/index.js logs owner/repo#123
+node ~/.claude/tools/grog/index.js logs https://github.com/owner/repo/issues/123
+node ~/.claude/tools/grog/index.js logs 123
+
+# Show more log lines (default: 50)
+node ~/.claude/tools/grog/index.js logs owner/repo#123 --lines=100
+```
+
+## What it shows
+
+- Timestamped log entries from worker activity
+- When the worker started, what it fetched, and when it completed
+- Any errors that occurred during processing
+- Summary of all active log files when using --all
+
+## Log file location
+
+Logs are stored in `/tmp/grog-logs/` with one file per issue:
+- `owner-repo-issue-123.log`
+
+## Error Handling
+
+- If no logs exist yet, inform the user that no workers have run
+- If the issue identifier is ambiguous, show available options
+EOF
+
+echo -e "  ${GREEN}✓${NC} Created /grog-logs skill"
+
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}  Installation complete! 🏴‍☠️${NC}"
@@ -196,11 +245,14 @@ echo -e "You can now use these commands in any Claude Code session:"
 echo ""
 echo -e "  ${CYAN}/grog-solve${NC} <issue-url>  - Fetch and solve a single issue"
 echo -e "  ${CYAN}/grog-explore${NC} <repo-url> - List all issues for batch processing"
+echo -e "  ${CYAN}/grog-logs${NC} <issue-id>   - View recent worker logs"
 echo ""
 echo -e "Examples:"
 echo -e "  ${YELLOW}/grog-solve https://github.com/owner/repo/issues/123${NC}"
 echo -e "  ${YELLOW}/grog-explore https://github.com/orgs/myorg/projects/1${NC}"
 echo -e "  ${YELLOW}/grog-explore https://github.com/owner/repo${NC}"
+echo -e "  ${YELLOW}/grog-logs --all${NC}"
+echo -e "  ${YELLOW}/grog-logs owner/repo#123${NC}"
 echo ""
 echo -e "Files installed to:"
 echo -e "  Tool:   ${CYAN}$TOOLS_DIR${NC}"

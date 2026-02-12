@@ -19,6 +19,10 @@ Why is it called GROG? Because after debugging production issues at 3 AM, you'll
   - Groups issues by status (for projects) or labels (for repos)
   - Hides completed/done issues automatically
   - Paginated API calls to fetch ALL issues (not just the first 100)
+- **`/grog-logs`** - View recent worker logs for any issue
+  - See what a worker is doing or has done for a specific issue
+  - List all active worker logs at a glance
+  - Supports multiple identifier formats (URLs, owner/repo#number, issue number)
 - **Automatic image downloads** - Screenshots and mockups saved to `/tmp/grog-attachments/`
 
 ## Installation
@@ -47,6 +51,10 @@ Then in any Claude Code session:
 
 # Explore all issues in a repository
 /grog-explore https://github.com/owner/repo
+
+# View worker logs
+/grog-logs --all
+/grog-logs owner/repo#123
 ```
 
 ### Manual Installation
@@ -83,6 +91,22 @@ Lists all issues from the project, grouped by status. Done issues are hidden by 
 - Org Projects: `https://github.com/orgs/orgname/projects/123`
 - User Projects: `https://github.com/users/username/projects/123`
 - Repositories: `https://github.com/owner/repo`
+
+### View Worker Logs
+
+```bash
+# List all worker log files
+node index.js logs --all
+
+# View logs for a specific issue
+node index.js logs owner/repo#123
+node index.js logs https://github.com/owner/repo/issues/123
+
+# Show more lines (default: 50)
+node index.js logs owner/repo#123 --lines=100
+```
+
+Logs are written to `/tmp/grog-logs/` with one file per issue. Each entry is timestamped so you can see exactly when a worker started, what it fetched, and when it completed.
 
 ### Example Output (Explore)
 
