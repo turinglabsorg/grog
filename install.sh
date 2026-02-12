@@ -5,22 +5,23 @@
 
 set -e
 
-# Colors for pretty output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Terminal style - no colors, monospace aesthetic
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
 
-echo -e "${CYAN}"
-echo "  ▄████  ██▀███   ▒█████    ▄████ "
-echo " ██▒ ▀█▒▓██ ▒ ██▒▒██▒  ██▒ ██▒ ▀█▒"
-echo "▒██░▄▄▄░▓██ ░▄█ ▒▒██░  ██▒▒██░▄▄▄░"
-echo "░▓█  ██▓▒██▀▀█▄  ▒██   ██░░▓█  ██▓"
-echo "░▒▓███▀▒░██▓ ▒██▒░ ████▓▒░░▒▓███▀▒"
-echo " ░▒   ▒ ░ ▒▓ ░▒▓░░ ▒░▒░▒░  ░▒   ▒ "
-echo -e "${NC}"
-echo -e "${YELLOW}GitHub Issue Fetcher for Claude Code${NC}"
+echo ""
+echo "┌──────────────────────────────────────────┐"
+echo "│                                          │"
+echo "│   ██████  ██████   ██████   ██████       │"
+echo "│  ██       ██   ██ ██    ██ ██            │"
+echo "│  ██   ███ ██████  ██    ██ ██   ███      │"
+echo "│  ██    ██ ██   ██ ██    ██ ██    ██      │"
+echo "│   ██████  ██   ██  ██████   ██████       │"
+echo "│                                          │"
+echo "│   github issue fetcher for claude code   │"
+echo "│                                          │"
+echo "└──────────────────────────────────────────┘"
 echo ""
 
 # Get the directory where this script is located
@@ -30,41 +31,41 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLS_DIR="$HOME/.claude/tools/grog"
 SKILLS_DIR="$HOME/.claude/skills"
 
-echo -e "${CYAN}[1/5]${NC} Creating directories..."
+echo -e "${BOLD}[1/5]${NC} creating directories..."
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
 mkdir -p "$SKILLS_DIR/grog-explore"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} Created $TOOLS_DIR"
-echo -e "  ${GREEN}✓${NC} Created skill directories"
+echo "  > $TOOLS_DIR"
+echo "  > skill directories"
 
 echo ""
-echo -e "${CYAN}[2/5]${NC} Copying files..."
+echo -e "${BOLD}[2/5]${NC} copying files..."
 cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
-echo -e "  ${GREEN}✓${NC} Copied index.js and package.json"
+echo "  > index.js and package.json"
 
 echo ""
-echo -e "${CYAN}[3/5]${NC} Installing dependencies..."
+echo -e "${BOLD}[3/5]${NC} installing dependencies..."
 cd "$TOOLS_DIR"
 npm install --silent
-echo -e "  ${GREEN}✓${NC} Dependencies installed"
+echo "  > dependencies installed"
 
 echo ""
-echo -e "${CYAN}[4/5]${NC} Configuring GitHub token..."
+echo -e "${BOLD}[4/5]${NC} configuring GitHub token..."
 echo ""
-echo -e "${YELLOW}To fetch GitHub issues, grog needs a Personal Access Token.${NC}"
-echo -e "You can create one at: ${CYAN}https://github.com/settings/tokens${NC}"
-echo -e "Required scope: ${GREEN}repo${NC} (for private repos) or ${GREEN}public_repo${NC} (for public only)"
+echo "To fetch GitHub issues, grog needs a Personal Access Token."
+echo "You can create one at: https://github.com/settings/tokens"
+echo "Required scope: repo (for private repos) or public_repo (for public only)"
 echo ""
 
 # Check if token already exists
 if [ -f "$TOOLS_DIR/.env" ] && grep -q "GH_TOKEN=" "$TOOLS_DIR/.env"; then
-    echo -e "${YELLOW}A token already exists in $TOOLS_DIR/.env${NC}"
-    read -p "Do you want to replace it? (y/N): " REPLACE_TOKEN
+    echo "  a token already exists in $TOOLS_DIR/.env"
+    read -p "  replace it? (y/N): " REPLACE_TOKEN
     if [[ ! "$REPLACE_TOKEN" =~ ^[Yy]$ ]]; then
-        echo -e "  ${GREEN}✓${NC} Keeping existing token"
+        echo "  > keeping existing token"
         SKIP_TOKEN=true
     fi
 fi
@@ -73,17 +74,17 @@ if [ "$SKIP_TOKEN" != "true" ]; then
     read -p "Enter your GitHub token (ghp_...): " GH_TOKEN
 
     if [ -z "$GH_TOKEN" ]; then
-        echo -e "  ${RED}✗${NC} No token provided. You'll need to add it manually to $TOOLS_DIR/.env"
+        echo "  ! no token provided. add it manually to $TOOLS_DIR/.env"
         echo "GH_TOKEN=" > "$TOOLS_DIR/.env"
     else
         echo "GH_TOKEN=$GH_TOKEN" > "$TOOLS_DIR/.env"
         chmod 600 "$TOOLS_DIR/.env"
-        echo -e "  ${GREEN}✓${NC} Token saved to $TOOLS_DIR/.env"
+        echo "  > token saved to $TOOLS_DIR/.env"
     fi
 fi
 
 echo ""
-echo -e "${CYAN}[5/5]${NC} Creating Claude Code skills..."
+echo -e "${BOLD}[5/5]${NC} creating Claude Code skills..."
 
 # Skill 1: /grog-solve - Fetch and solve a single issue
 cat > "$SKILLS_DIR/grog-solve/SKILL.md" << 'EOF'
@@ -130,7 +131,7 @@ Be proactive: your goal is to solve the issue, not just report on it.
 - If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
 EOF
 
-echo -e "  ${GREEN}✓${NC} Created /grog-solve skill"
+echo "  > /grog-solve skill"
 
 # Skill 2: /grog-explore - Explore a project's issues for batch processing
 cat > "$SKILLS_DIR/grog-explore/SKILL.md" << 'EOF'
@@ -185,24 +186,24 @@ node ~/.claude/tools/grog/index.js explore https://github.com/owner/repo
 - If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
 EOF
 
-echo -e "  ${GREEN}✓${NC} Created /grog-explore skill"
+echo "  > /grog-explore skill"
 
 echo ""
-echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  Installation complete! 🏴‍☠️${NC}"
-echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+echo "┌──────────────────────────────────────────────────────────┐"
+echo "│  installation complete.                                  │"
+echo "└──────────────────────────────────────────────────────────┘"
 echo ""
-echo -e "You can now use these commands in any Claude Code session:"
+echo "  commands available in any Claude Code session:"
 echo ""
-echo -e "  ${CYAN}/grog-solve${NC} <issue-url>  - Fetch and solve a single issue"
-echo -e "  ${CYAN}/grog-explore${NC} <repo-url> - List all issues for batch processing"
+echo "    /grog-solve <issue-url>     fetch and solve a single issue"
+echo "    /grog-explore <repo-url>    list all issues for batch processing"
 echo ""
-echo -e "Examples:"
-echo -e "  ${YELLOW}/grog-solve https://github.com/owner/repo/issues/123${NC}"
-echo -e "  ${YELLOW}/grog-explore https://github.com/orgs/myorg/projects/1${NC}"
-echo -e "  ${YELLOW}/grog-explore https://github.com/owner/repo${NC}"
+echo "  examples:"
+echo "    /grog-solve https://github.com/owner/repo/issues/123"
+echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
+echo "    /grog-explore https://github.com/owner/repo"
 echo ""
-echo -e "Files installed to:"
-echo -e "  Tool:   ${CYAN}$TOOLS_DIR${NC}"
-echo -e "  Skills: ${CYAN}$SKILLS_DIR/grog-*${NC}"
+echo "  files:"
+echo "    tool:   $TOOLS_DIR"
+echo "    skills: $SKILLS_DIR/grog-*"
 echo ""

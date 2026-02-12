@@ -13,7 +13,7 @@ config({ path: join(__dirname, ".env") });
 const GH_TOKEN = process.env.GH_TOKEN;
 
 if (!GH_TOKEN) {
-  console.error("Error: GH_TOKEN not found in .env file");
+  console.error("! error: GH_TOKEN not found in .env file");
   process.exit(1);
 }
 
@@ -365,29 +365,68 @@ async function downloadImage(url, outputPath) {
 }
 
 /**
+ * Print a horizontal rule
+ */
+function hr(char = "─", width = 60) {
+  return char.repeat(width);
+}
+
+/**
+ * Print a boxed header
+ */
+function boxHeader(text, width = 60) {
+  const inner = width - 2;
+  const pad = Math.max(0, inner - text.length);
+  const padL = Math.floor(pad / 2);
+  const padR = pad - padL;
+  console.log("┌" + hr("─", inner) + "┐");
+  console.log("│" + " ".repeat(padL) + text + " ".repeat(padR) + "│");
+  console.log("└" + hr("─", inner) + "┘");
+}
+
+/**
+ * Print a section header
+ */
+function sectionHeader(text, width = 60) {
+  console.log("");
+  console.log("┌" + hr("─", width - 2) + "┐");
+  console.log("│ " + text + " ".repeat(Math.max(0, width - 3 - text.length)) + "│");
+  console.log("└" + hr("─", width - 2) + "┘");
+}
+
+/**
+ * Print a labeled field
+ */
+function field(label, value) {
+  console.log(`  ${label.padEnd(10)} ${value}`);
+}
+
+/**
  * Print issue details with image download
  */
 async function printIssueDetails(issue, owner, repo) {
-  console.log("=".repeat(60));
-  console.log(`Issue #${issue.number}: ${issue.title}`);
-  console.log("=".repeat(60));
-  console.log(`State: ${issue.state}`);
-  console.log(`Author: ${issue.user?.login}`);
-  console.log(`Created: ${new Date(issue.created_at).toLocaleString()}`);
+  console.log("");
+  boxHeader(`#${issue.number}: ${issue.title}`);
+  console.log("");
+  field("state", issue.state);
+  field("author", issue.user?.login || "unknown");
+  field("created", new Date(issue.created_at).toLocaleString());
   if (issue.labels?.length > 0) {
-    console.log(`Labels: ${issue.labels.map((l) => l.name).join(", ")}`);
+    field("labels", issue.labels.map((l) => l.name).join(", "));
   }
-  console.log("-".repeat(60));
-  console.log("\nDescription:\n");
-  console.log(issue.body || "(No description provided)");
-  console.log("\n" + "=".repeat(60));
+  console.log("");
+  console.log(hr("─"));
+  console.log("");
+  console.log(issue.body || "(no description provided)");
+  console.log("");
+  console.log(hr("─"));
 
   // Extract and download images
   const imageUrls = extractImageUrls(issue.body);
 
   if (imageUrls.length > 0) {
     console.log(
-      `\nFound ${imageUrls.length} image attachment(s). Downloading...\n`,
+      `\n> ${imageUrls.length} image attachment(s) found. downloading...\n`,
     );
 
     const outputDir = "/tmp/grog-attachments";
@@ -407,19 +446,20 @@ async function printIssueDetails(issue, owner, repo) {
         const finalPath = join(outputDir, filename);
         renameSync(tempPath, finalPath);
         console.log(
-          `  Downloaded: ${finalPath} (${(size / 1024).toFixed(1)} KB)`,
+          `  > ${finalPath} (${(size / 1024).toFixed(1)} KB)`,
         );
         downloadedFiles.push(finalPath);
       } catch (err) {
-        console.error(`  Failed to download image ${i + 1}: ${err.message}`);
+        console.error(`  ! failed to download image ${i + 1}: ${err.message}`);
       }
     }
 
     if (downloadedFiles.length > 0) {
-      console.log("\n" + "=".repeat(60));
-      console.log("IMAGE ATTACHMENTS (use Read tool to analyze these):");
-      console.log("=".repeat(60));
-      downloadedFiles.forEach((f) => console.log(f));
+      sectionHeader("IMAGE ATTACHMENTS");
+      console.log("");
+      downloadedFiles.forEach((f) => console.log(`  ${f}`));
+      console.log("");
+      console.log("  (use Read tool to analyze these)");
     }
   }
 }
@@ -430,14 +470,14 @@ async function printIssueDetails(issue, owner, repo) {
 async function handleSolve(issueUrl) {
   const parsed = parseGitHubIssueUrl(issueUrl);
   if (!parsed) {
-    console.error("Error: Invalid GitHub issue URL");
-    console.error("Expected format: https://github.com/owner/repo/issues/123");
+    console.error("! error: invalid GitHub issue URL");
+    console.error("  expected: https://github.com/owner/repo/issues/123");
     process.exit(1);
   }
 
   try {
     console.log(
-      `Fetching issue #${parsed.issueNumber} from ${parsed.owner}/${parsed.repo}...\n`,
+      `> fetching issue #${parsed.issueNumber} from ${parsed.owner}/${parsed.repo}...`,
     );
     const issue = await fetchIssue(
       parsed.owner,
@@ -446,7 +486,7 @@ async function handleSolve(issueUrl) {
     );
     await printIssueDetails(issue, parsed.owner, parsed.repo);
   } catch (error) {
-    console.error("Error fetching issue:", error.message);
+    console.error("! error:", error.message);
     process.exit(1);
   }
 }
@@ -455,19 +495,19 @@ async function handleSolve(issueUrl) {
  * Handle 'explore' command for a repository
  */
 async function handleExploreRepo(owner, repo) {
-  console.log(`Fetching issues from ${owner}/${repo}...\n`);
+  console.log(`> fetching issues from ${owner}/${repo}...`);
 
   const openIssues = await fetchIssues(owner, repo, "open");
 
   if (openIssues.length === 0) {
-    console.log("No open issues found in this repository.");
+    console.log("> no open issues found.");
     process.exit(0);
   }
 
-  console.log("=".repeat(60));
-  console.log(`ISSUES IN ${owner}/${repo}`);
-  console.log("=".repeat(60));
-  console.log(`\nFound ${openIssues.length} open issue(s):\n`);
+  console.log("");
+  boxHeader(`${owner}/${repo}`);
+  console.log("");
+  console.log(`  ${openIssues.length} open issue(s)`);
 
   // Group issues by labels for better organization
   const labelGroups = new Map();
@@ -486,39 +526,36 @@ async function handleExploreRepo(owner, repo) {
     }
   });
 
-  // Print issues grouped by label
-  console.log("ISSUES BY LABEL:");
-  console.log("-".repeat(40));
+  sectionHeader("ISSUES BY LABEL");
 
   for (const [label, issues] of labelGroups) {
-    console.log(`\n[${label}] (${issues.length} issues)`);
+    console.log("");
+    console.log(`  [${label}] (${issues.length})`);
     issues.forEach((issue) => {
-      console.log(`  #${issue.number}: ${issue.title}`);
+      console.log(`    #${issue.number}  ${issue.title}`);
     });
   }
 
   if (unlabeled.length > 0) {
-    console.log(`\n[unlabeled] (${unlabeled.length} issues)`);
+    console.log("");
+    console.log(`  [unlabeled] (${unlabeled.length})`);
     unlabeled.forEach((issue) => {
-      console.log(`  #${issue.number}: ${issue.title}`);
+      console.log(`    #${issue.number}  ${issue.title}`);
     });
   }
 
-  console.log("\n" + "=".repeat(60));
-  console.log("ALL ISSUES (numbered list for selection):");
-  console.log("=".repeat(60));
+  sectionHeader("ALL ISSUES");
+  console.log("");
 
   openIssues.forEach((issue, index) => {
     const labels =
       issue.labels?.length > 0
-        ? ` [${issue.labels.map((l) => l.name).join(", ")}]`
+        ? `  [${issue.labels.map((l) => l.name).join(", ")}]`
         : "";
-    console.log(`${index + 1}. #${issue.number}: ${issue.title}${labels}`);
+    console.log(`  ${String(index + 1).padStart(3)}.  #${issue.number}  ${issue.title}${labels}`);
   });
 
-  console.log("\n" + "=".repeat(60));
-  console.log("NEXT STEPS:");
-  console.log("=".repeat(60));
+  sectionHeader("NEXT STEPS");
   console.log(`
 Ask the user which issues they want to work on. They can specify:
 - A label name (e.g., "todo", "bug", "enhancement") to work on all issues with that label
@@ -541,15 +578,15 @@ Repository URL for issues: https://github.com/${owner}/${repo}/issues/
 async function handleExploreProject(owner, projectNumber, isOrg) {
   const projectType = isOrg ? "organization" : "user";
   console.log(
-    `Fetching project #${projectNumber} from ${projectType} ${owner}...\n`,
+    `> fetching project #${projectNumber} from ${projectType} ${owner}...`,
   );
 
   const project = await fetchProjectItems(owner, projectNumber, isOrg);
 
-  console.log("=".repeat(60));
-  console.log(`PROJECT: ${project.title}`);
-  console.log("=".repeat(60));
-  console.log(`URL: ${project.url}\n`);
+  console.log("");
+  boxHeader(project.title);
+  console.log("");
+  console.log(`  url: ${project.url}`);
 
   // Get status field options if available
   const statusField = project.fields?.nodes?.find(
@@ -600,7 +637,7 @@ async function handleExploreProject(owner, projectNumber, isOrg) {
   }
 
   if (issues.length === 0) {
-    console.log("No issues found in this project.");
+    console.log("> no issues found in this project.");
     process.exit(0);
   }
 
@@ -609,24 +646,21 @@ async function handleExploreProject(owner, projectNumber, isOrg) {
   const doneCount = issues.length - activeIssues.length;
 
   console.log(
-    `Found ${issues.length} issue(s) total (${doneCount} done, ${activeIssues.length} active):\n`,
+    `  ${issues.length} issue(s) total  |  ${doneCount} done  |  ${activeIssues.length} active`,
   );
 
   // Print available statuses with counts
   if (statusOptions.length > 0) {
-    console.log("STATUSES:");
-    console.log("-".repeat(40));
+    sectionHeader("STATUSES");
+    console.log("");
     statusOptions.forEach((s) => {
       const count = itemsByStatus.get(s)?.length || 0;
-      const marker = s.toLowerCase() === "done" ? " (hidden)" : "";
-      console.log(`  [${s}] - ${count} issue(s)${marker}`);
+      const marker = s.toLowerCase() === "done" ? "  (hidden)" : "";
+      console.log(`  [${s}] ${String(count).padStart(3)} issue(s)${marker}`);
     });
-    console.log("");
   }
 
-  console.log("=".repeat(60));
-  console.log("NEXT STEPS:");
-  console.log("=".repeat(60));
+  sectionHeader("NEXT STEPS");
   console.log(`
 Ask the user which issues they want to work on. They can specify:
 - A status name (e.g., "Todo", "In Progress") to work on all issues with that status
@@ -640,7 +674,7 @@ Once the user selects, process each issue one by one:
 4. Move to the next issue
 
 Active issues:
-${activeIssues.length > 0 ? activeIssues.map((i) => `  ${i.owner}/${i.repo}#${i.number} ${i.title}`).join("\n") : "  (none)"}
+${activeIssues.length > 0 ? activeIssues.map((i) => `  ${i.owner}/${i.repo}#${i.number}  ${i.title}`).join("\n") : "  (none)"}
 `);
 }
 
@@ -650,15 +684,11 @@ ${activeIssues.length > 0 ? activeIssues.map((i) => `  ${i.owner}/${i.repo}#${i.
 async function handleExplore(url) {
   const parsed = parseGitHubUrl(url);
   if (!parsed) {
-    console.error("Error: Invalid GitHub URL");
-    console.error("Expected formats:");
-    console.error("  - Repository: https://github.com/owner/repo");
-    console.error(
-      "  - Org Project: https://github.com/orgs/orgname/projects/123",
-    );
-    console.error(
-      "  - User Project: https://github.com/users/username/projects/123",
-    );
+    console.error("! error: invalid GitHub URL");
+    console.error("  expected formats:");
+    console.error("    https://github.com/owner/repo");
+    console.error("    https://github.com/orgs/orgname/projects/123");
+    console.error("    https://github.com/users/username/projects/123");
     process.exit(1);
   }
 
@@ -673,7 +703,7 @@ async function handleExplore(url) {
       );
     }
   } catch (error) {
-    console.error("Error:", error.message);
+    console.error("! error:", error.message);
     process.exit(1);
   }
 }
@@ -686,26 +716,26 @@ async function main() {
   const url = process.argv[3];
 
   if (!command) {
-    console.log("Usage:");
-    console.log(
-      "  grog solve <github-issue-url>      - Fetch and solve a single issue",
-    );
-    console.log(
-      "  grog explore <github-project-url>  - List all issues for batch processing",
-    );
     console.log("");
-    console.log("Examples:");
-    console.log("  grog solve https://github.com/owner/repo/issues/123");
-    console.log("  grog explore https://github.com/owner/repo");
-    console.log("  grog explore https://github.com/orgs/myorg/projects/1");
+    boxHeader("GROG");
+    console.log("");
+    console.log("  usage:");
+    console.log("    grog solve <issue-url>       fetch and solve a single issue");
+    console.log("    grog explore <project-url>   list all issues for batch processing");
+    console.log("");
+    console.log("  examples:");
+    console.log("    grog solve https://github.com/owner/repo/issues/123");
+    console.log("    grog explore https://github.com/owner/repo");
+    console.log("    grog explore https://github.com/orgs/myorg/projects/1");
+    console.log("");
     process.exit(1);
   }
 
   switch (command) {
     case "solve":
       if (!url) {
-        console.error("Error: Missing issue URL");
-        console.log("Usage: grog solve <github-issue-url>");
+        console.error("! error: missing issue URL");
+        console.log("  usage: grog solve <github-issue-url>");
         process.exit(1);
       }
       await handleSolve(url);
@@ -713,8 +743,8 @@ async function main() {
 
     case "explore":
       if (!url) {
-        console.error("Error: Missing URL");
-        console.log("Usage: grog explore <github-repo-or-project-url>");
+        console.error("! error: missing URL");
+        console.log("  usage: grog explore <github-repo-or-project-url>");
         process.exit(1);
       }
       await handleExplore(url);
@@ -727,8 +757,8 @@ async function main() {
       } else if (command.includes("github.com")) {
         await handleExplore(command);
       } else {
-        console.error(`Unknown command: ${command}`);
-        console.log("Available commands: solve, explore");
+        console.error(`! error: unknown command '${command}'`);
+        console.log("  available: solve, explore");
         process.exit(1);
       }
   }
