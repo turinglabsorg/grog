@@ -19,5 +19,9 @@ export function loadConfig(): Config {
     maxConcurrentJobs: parseInt(process.env.MAX_CONCURRENT_JOBS ?? "2", 10),
     workDir: process.env.WORK_DIR ?? "/tmp/grog-jobs",
     mongodbUri: process.env.MONGODB_URI ?? "mongodb://localhost:27017/grog",
+    agentTimeoutMinutes: parseInt(process.env.AGENT_TIMEOUT_MINUTES ?? "30", 10),
+    maxRetries: parseInt(process.env.MAX_RETRIES ?? "2", 10),
+    dailyTokenBudget: parseInt(process.env.DAILY_TOKEN_BUDGET ?? "0", 10),
+    hourlyTokenBudget: parseInt(process.env.HOURLY_TOKEN_BUDGET ?? "0", 10),
   };
 }

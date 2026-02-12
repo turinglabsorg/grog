@@ -1,6 +1,9 @@
 import { MongoClient, Collection } from "mongodb";
 import type { JobState } from "./types.js";
 import type { OutputLine } from "./outputStore.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("state");
 
 interface JobLogDoc {
   jobId: string;
@@ -37,7 +40,7 @@ export class StateManager {
 
     await logsCollection.createIndex({ jobId: 1 }, { unique: true });
 
-    console.log("[state] Connected to MongoDB");
+    log.info("Connected to MongoDB");
     return new StateManager(collection, logsCollection);
   }
 

@@ -14,19 +14,41 @@ import { StateManager } from "./state.js";
 import { buildSolvePrompt } from "./prompt.js";
 import { pushLine, cleanup } from "./outputStore.js";
 import type { OutputLine } from "./outputStore.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("runner");
 
 function makeJobId(owner: string, repo: string, issueNumber: number): string {
   return `${owner}/${repo}#${issueNumber}`;
 }
 
+function isRetryableError(msg: string): boolean {
+  const retryablePatterns = [
+    /clone.*failed/i,
+    /git.*error/i,
+    /ECONNRESET/i,
+    /ECONNREFUSED/i,
+    /ETIMEDOUT/i,
+    /ENOTFOUND/i,
+    /rate limit/i,
+    /503/,
+    /502/,
+    /500/,
+    /Failed to spawn claude/i,
+  ];
+  return retryablePatterns.some((p) => p.test(msg));
+}
+
 interface SpawnResult {
   text: string;
+  timedOut?: boolean;
   usage?: { inputTokens: number; outputTokens: number };
 }
 
 function spawnClaude(
   prompt: string,
   cwd: string,
+  timeoutMs: number,
   onEvent?: (event: any) => void
 ): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
@@ -51,6 +73,17 @@ function spawnClaude(
     let text = "";
     let usage = { inputTokens: 0, outputTokens: 0 };
     let stderr = "";
+    let timedOut = false;
+
+    // Timeout handler
+    const timer = setTimeout(() => {
+      timedOut = true;
+      log.warn(`Agent timed out after ${Math.round(timeoutMs / 60000)} minutes — killing process`);
+      proc.kill("SIGTERM");
+      setTimeout(() => {
+        if (!proc.killed) proc.kill("SIGKILL");
+      }, 10000);
+    }, timeoutMs);
 
     const rl = createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
@@ -59,7 +92,6 @@ function spawnClaude(
         const event = JSON.parse(line);
         if (onEvent) onEvent(event);
 
-        // Accumulate assistant text
         if (event.type === "assistant" && event.message?.content) {
           for (const block of event.message.content) {
             if (block.type === "text") {
@@ -68,20 +100,16 @@ function spawnClaude(
           }
         }
 
-        // Content block delta — streaming text chunks
         if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
           text += event.delta.text;
         }
 
-        // Result message with final text
         if (event.type === "result" && event.result) {
-          // If result contains full text, prefer that
           if (typeof event.result === "string") {
             text = event.result;
           }
         }
 
-        // Track usage from any event that carries it
         if (event.usage) {
           usage.inputTokens += event.usage.input_tokens ?? 0;
           usage.outputTokens += event.usage.output_tokens ?? 0;
@@ -100,21 +128,26 @@ function spawnClaude(
     });
 
     proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        resolve({ text, timedOut: true, usage: usage.inputTokens > 0 ? usage : undefined });
+        return;
+      }
       if (code !== 0) {
-        console.error(`[runner] Claude exited with code ${code}`);
-        console.error(`[runner] stderr: ${stderr.slice(-500)}`);
+        log.error(`Claude exited with code ${code}`);
+        log.debug(`stderr: ${stderr.slice(-500)}`);
       }
       resolve({ text, usage: usage.inputTokens > 0 ? usage : undefined });
     });
 
     proc.on("error", (err) => {
+      clearTimeout(timer);
       reject(new Error(`Failed to spawn claude: ${err.message}`));
     });
   });
 }
 
 function eventToOutputLine(event: any): OutputLine | null {
-  // Assistant text content
   if (event.type === "assistant" && event.message?.content) {
     for (const block of event.message.content) {
       if (block.type === "text" && block.text?.trim()) {
@@ -126,12 +159,10 @@ function eventToOutputLine(event: any): OutputLine | null {
     }
   }
 
-  // Content block start — tool_use
   if (event.type === "content_block_start" && event.content_block?.type === "tool_use") {
     return toolUseToLine(event.content_block);
   }
 
-  // Streaming text delta
   if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
     const t = event.delta.text?.trim();
     if (t) return { ts: Date.now(), type: "text", content: t };
@@ -172,7 +203,6 @@ function toolUseToLine(block: any): OutputLine {
 }
 
 function parseAgentOutput(output: string, repoPath: string, defaultBranch: string): AgentResult {
-  // Check for NEEDS_CLARIFICATION marker
   const clarifyMatch = output.match(
     /RESULT:\s*NEEDS_CLARIFICATION\s*\n([\s\S]*?)(?:```|$)/
   );
@@ -183,13 +213,10 @@ function parseAgentOutput(output: string, repoPath: string, defaultBranch: strin
     };
   }
 
-  // Check for PR_READY marker
   if (/RESULT:\s*PR_READY/.test(output)) {
     return { type: "pr_ready", message: "Agent marked as ready for PR." };
   }
 
-  // Fallback: check if there are actual commits on the branch
-  // Try the actual default branch first, then origin/<branch>, then common names
   const candidates = [
     defaultBranch,
     `origin/${defaultBranch}`,
@@ -200,21 +227,19 @@ function parseAgentOutput(output: string, repoPath: string, defaultBranch: strin
   ].filter(Boolean);
   for (const base of candidates) {
     try {
-      const log = execSync(`git log --oneline ${base}..HEAD`, {
+      const gitLog = execSync(`git log --oneline ${base}..HEAD`, {
         cwd: repoPath,
         encoding: "utf-8",
       }).trim();
 
-      if (log.length > 0) {
+      if (gitLog.length > 0) {
         return {
           type: "pr_ready",
-          message: `Agent made commits (detected via git log):\n${log}`,
+          message: `Agent made commits (detected via git log):\n${gitLog}`,
         };
       }
-      // If git log succeeded but was empty, the agent made no commits
       break;
     } catch {
-      // This base ref doesn't exist, try the next one
       continue;
     }
   }
@@ -231,6 +256,7 @@ export async function runAgent(
   state: StateManager
 ): Promise<void> {
   const jobId = makeJobId(job.owner, job.repo, job.issueNumber);
+  const jlog = log.child(jobId);
   const branchName = `grog/issue-${job.issueNumber}`;
   const jobDir = path.join(
     config.workDir,
@@ -239,10 +265,10 @@ export async function runAgent(
   const repoPath = path.join(jobDir, job.repo);
 
   // Helper: push to in-memory store + persist to MongoDB
-  function log(line: OutputLine) {
+  function logLine(line: OutputLine) {
     pushLine(jobId, line);
     state.appendJobLog(jobId, line).catch((err) =>
-      console.error(`[runner] Failed to persist log for ${jobId}:`, err)
+      jlog.error(`Failed to persist log: ${err}`)
     );
   }
 
@@ -271,8 +297,8 @@ export async function runAgent(
     );
 
     // Clone repo
-    log({ ts: Date.now(), type: "status", content: "Cloning repository" });
-    console.log(`[runner] Cloning ${job.owner}/${job.repo} into ${jobDir}`);
+    logLine({ ts: Date.now(), type: "status", content: "Cloning repository" });
+    jlog.info(`Cloning ${job.owner}/${job.repo} into ${jobDir}`);
     fs.mkdirSync(jobDir, { recursive: true });
 
     if (fs.existsSync(repoPath)) {
@@ -291,8 +317,8 @@ export async function runAgent(
     });
 
     // Fetch issue + comments
-    log({ ts: Date.now(), type: "status", content: "Fetching issue & comments" });
-    console.log(`[runner] Fetching issue #${job.issueNumber} and comments`);
+    logLine({ ts: Date.now(), type: "status", content: "Fetching issue & comments" });
+    jlog.info(`Fetching issue #${job.issueNumber} and comments`);
     const [issue, comments] = await Promise.all([
       fetchIssue(job.owner, job.repo, job.issueNumber, config),
       fetchIssueComments(job.owner, job.repo, job.issueNumber, config),
@@ -304,13 +330,14 @@ export async function runAgent(
     const prompt = buildSolvePrompt(issue, comments, repoPath, config);
 
     // Spawn Claude with event streaming
-    log({ ts: Date.now(), type: "status", content: "Running Claude agent" });
-    console.log(`[runner] Spawning Claude agent for ${jobId}`);
+    logLine({ ts: Date.now(), type: "status", content: "Running Claude agent" });
+    jlog.info("Spawning Claude agent");
 
+    const timeoutMs = config.agentTimeoutMinutes * 60 * 1000;
     let lastUsagePersist = 0;
-    const { text: output, usage } = await spawnClaude(prompt, repoPath, (event) => {
+    const { text: output, timedOut, usage } = await spawnClaude(prompt, repoPath, timeoutMs, (event) => {
       const line = eventToOutputLine(event);
-      if (line) log(line);
+      if (line) logLine(line);
 
       // Real-time token usage tracking
       let usageChanged = false;
@@ -326,7 +353,6 @@ export async function runAgent(
         jobState.tokenUsage.outputTokens += event.message.usage.output_tokens ?? 0;
         usageChanged = true;
       }
-      // Throttled persist — save at most every 3 seconds
       if (usageChanged) {
         const now = Date.now();
         if (now - lastUsagePersist > 3000) {
@@ -337,29 +363,57 @@ export async function runAgent(
       }
     });
 
-    console.log(`[runner] Claude agent finished for ${jobId}`);
+    jlog.info("Claude agent finished");
 
     // Save token usage
     if (usage) {
       jobState.tokenUsage = usage;
-      console.log(`[runner] Token usage for ${jobId}: input=${usage.inputTokens}, output=${usage.outputTokens}`);
+      jlog.info(`Token usage: input=${usage.inputTokens}, output=${usage.outputTokens}`, {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+      });
+    }
+
+    // Handle timeout
+    if (timedOut) {
+      logLine({ ts: Date.now(), type: "error", content: `Agent timed out after ${config.agentTimeoutMinutes} minutes` });
+      jlog.error(`Agent timed out after ${config.agentTimeoutMinutes} minutes`);
+
+      jobState.status = "failed";
+      jobState.failureReason = "timeout";
+      jobState.updatedAt = new Date().toISOString();
+      await state.upsertJob(jobState);
+
+      try {
+        await postComment(
+          job.owner,
+          job.repo,
+          job.issueNumber,
+          `I ran out of time working on this (${config.agentTimeoutMinutes} minute limit). The task may be too complex for a single run.`,
+          config
+        );
+      } catch {
+        jlog.error("Failed to post timeout comment");
+      }
+
+      return;
     }
 
     // Parse result
     const result = parseAgentOutput(output, repoPath, job.defaultBranch);
-    console.log(`[runner] Agent result: ${result.type}`);
+    jlog.info(`Agent result: ${result.type}`);
 
     if (result.type === "pr_ready") {
       // Push branch
-      log({ ts: Date.now(), type: "status", content: "Pushing branch" });
-      console.log(`[runner] Pushing branch ${branchName}`);
+      logLine({ ts: Date.now(), type: "status", content: "Pushing branch" });
+      jlog.info(`Pushing branch ${branchName}`);
       execSync(`git push origin ${branchName}`, {
         cwd: repoPath,
         stdio: "pipe",
       });
 
       // Create PR via REST API
-      log({ ts: Date.now(), type: "status", content: "Creating pull request" });
+      logLine({ ts: Date.now(), type: "status", content: "Creating pull request" });
       const prTitle = `Fix #${job.issueNumber}: ${issue.title}`;
       const prBody = `Automated fix for #${job.issueNumber}.\n\nGenerated by Grog.`;
       const prUrl = await createPullRequest(
@@ -403,7 +457,6 @@ export async function runAgent(
       // Cleanup working directory on success
       fs.rmSync(jobDir, { recursive: true, force: true });
     } else if (result.type === "needs_clarification") {
-      // Post clarification questions as a comment
       await postComment(
         job.owner,
         job.repo,
@@ -415,10 +468,7 @@ export async function runAgent(
       jobState.status = "waiting_for_reply";
       jobState.updatedAt = new Date().toISOString();
       await state.upsertJob(jobState);
-
-      // Keep working directory for retry
     } else {
-      // Failed
       await postComment(
         job.owner,
         job.repo,
@@ -432,25 +482,43 @@ export async function runAgent(
       await state.upsertJob(jobState);
     }
   } catch (err) {
-    console.error(`[runner] Error running agent for ${jobId}:`, err);
+    const errorMsg = (err as Error).message ?? String(err);
+    jlog.error(`Error: ${errorMsg}`);
+    logLine({ ts: Date.now(), type: "error", content: errorMsg.slice(0, 300) });
 
-    jobState.status = "failed";
-    jobState.updatedAt = new Date().toISOString();
-    await state.upsertJob(jobState);
+    // Determine if this is a retryable failure
+    const retryable = isRetryableError(errorMsg);
+    const retryCount = jobState.retryCount ?? 0;
+    const canRetry = retryable && retryCount < config.maxRetries;
 
-    try {
-      await postComment(
-        job.owner,
-        job.repo,
-        job.issueNumber,
-        `Something went wrong while I was working on this. The error has been logged.`,
-        config
-      );
-    } catch {
-      console.error(`[runner] Failed to post error comment for ${jobId}`);
+    if (canRetry) {
+      jobState.status = "queued";
+      jobState.retryCount = retryCount + 1;
+      jobState.failureReason = errorMsg.slice(0, 200);
+      jobState.updatedAt = new Date().toISOString();
+      await state.upsertJob(jobState);
+
+      jlog.info(`Retryable failure — will retry (attempt ${jobState.retryCount}/${config.maxRetries})`);
+      logLine({ ts: Date.now(), type: "status", content: `Retrying (attempt ${jobState.retryCount}/${config.maxRetries})...` });
+    } else {
+      jobState.status = "failed";
+      jobState.failureReason = errorMsg.slice(0, 200);
+      jobState.updatedAt = new Date().toISOString();
+      await state.upsertJob(jobState);
+
+      try {
+        await postComment(
+          job.owner,
+          job.repo,
+          job.issueNumber,
+          `Something went wrong while I was working on this. The error has been logged.`,
+          config
+        );
+      } catch {
+        jlog.error("Failed to post error comment");
+      }
     }
   } finally {
-    // Clean up output store when job reaches terminal state
     cleanup(jobId);
   }
 }

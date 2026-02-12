@@ -131,6 +131,11 @@ export function renderDashboard(jobs: JobState[]): string {
   header { background: #0f172a; color: #f8fafc; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
   header h1 { font-size: 20px; font-weight: 700; }
   header .subtitle { font-size: 13px; color: #94a3b8; }
+  .budget-bar { margin-left: auto; display: flex; gap: 16px; align-items: center; font-size: 12px; color: #94a3b8; }
+  .budget-bar .budget-item { display: flex; align-items: center; gap: 6px; }
+  .budget-bar .budget-label { font-weight: 600; }
+  .budget-bar .budget-val { font-family: monospace; }
+  .budget-bar .budget-paused { color: #fbbf24; font-weight: 700; }
   .board { display: flex; gap: 16px; padding: 20px; overflow-x: auto; min-height: calc(100vh - 64px); }
   .column { flex: 1; min-width: 240px; border-radius: 8px; display: flex; flex-direction: column; }
   .column-header { padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }
@@ -200,6 +205,7 @@ export function renderDashboard(jobs: JobState[]): string {
 <header>
   <h1>Grog</h1>
   <span class="subtitle">Job Dashboard</span>
+  <div class="budget-bar" id="budgetBar"></div>
 </header>
 <div class="board" id="board">
 ${columnsHtml}
@@ -508,7 +514,32 @@ board.addEventListener("drop", async function(e) {
   }
 });
 
+async function refreshBudget() {
+  try {
+    const res = await fetch("/budget");
+    const b = await res.json();
+    const bar = document.getElementById("budgetBar");
+    if (b.hourlyLimit === 0 && b.dailyLimit === 0) {
+      bar.innerHTML = "";
+      return;
+    }
+    let html = "";
+    if (b.hourlyLimit > 0) {
+      html += '<div class="budget-item"><span class="budget-label">1h:</span><span class="budget-val">' + formatTokens(b.hourlyUsed) + '/' + formatTokens(b.hourlyLimit) + '</span></div>';
+    }
+    if (b.dailyLimit > 0) {
+      html += '<div class="budget-item"><span class="budget-label">24h:</span><span class="budget-val">' + formatTokens(b.dailyUsed) + '/' + formatTokens(b.dailyLimit) + '</span></div>';
+    }
+    if (b.paused) {
+      html += '<span class="budget-paused">PAUSED</span>';
+    }
+    bar.innerHTML = html;
+  } catch {}
+}
+refreshBudget();
+
 setInterval(refresh, 1000);
+setInterval(refreshBudget, 10000);
 </script>
 </body>
 </html>`;

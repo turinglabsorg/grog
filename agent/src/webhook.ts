@@ -8,6 +8,9 @@ import type {
 } from "./types.js";
 import { JobQueue } from "./queue.js";
 import { StateManager } from "./state.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("webhook");
 
 export function verifySignature(
   payload: string,
@@ -50,9 +53,7 @@ async function handleIssueComment(
     const prUrl = payload.issue.pull_request.html_url;
     const originalJob = await state.getJobByPrUrl(prUrl);
     if (originalJob) {
-      console.log(
-        `[webhook] PR comment detected — routing to original issue #${originalJob.issueNumber}`
-      );
+      log.info(`PR comment detected — routing to original issue #${originalJob.issueNumber}`);
       issueNumber = originalJob.issueNumber;
     }
   }
@@ -130,7 +131,7 @@ async function handlePullRequestEvent(
   job.updatedAt = new Date().toISOString();
   await state.upsertJob(job);
 
-  console.log(`[webhook] PR merged — marked job ${job.id} as completed`);
+  log.info(`PR merged — marked job ${job.id} as completed`);
   res.status(200).json({ completed: true, job: job.id });
 }
 
@@ -145,7 +146,7 @@ export function createWebhookHandler(
     const rawBody = (req as Request & { rawBody?: string }).rawBody;
 
     if (!rawBody || !verifySignature(rawBody, signature, config.webhookSecret)) {
-      console.warn("[webhook] Invalid signature — rejecting request");
+      log.warn("Invalid signature — rejecting request");
       res.status(401).json({ error: "Invalid signature" });
       return;
     }

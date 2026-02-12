@@ -25,12 +25,12 @@
 
 ## Phase 2 — Hardening
 
-- [ ] Error recovery and retry logic
-- [ ] Timeout handling for long-running agents
-- [ ] Logging (structured JSON logs)
-- [ ] Systemd service / PM2 config for VPS deployment
-- [ ] Rate limiting to respect Claude subscription limits
-- [ ] Secondary GitHub API rate limit handling (retry with backoff)
+- [x] Error recovery and retry logic (retryable error classification, auto re-enqueue)
+- [x] Timeout handling for long-running agents (configurable `AGENT_TIMEOUT_MINUTES`, SIGTERM/SIGKILL)
+- [x] Logging (structured JSON logs via `LOG_FORMAT=json`, per-component logger)
+- [x] PM2 ecosystem config for VPS deployment (`ecosystem.config.cjs`)
+- [x] Rate limiting to respect Claude subscription limits (daily/hourly token budgets, dashboard indicator)
+- [x] GitHub API rate limit handling (exponential backoff with jitter, `Retry-After` / `x-ratelimit-reset` support)
 
 ## Phase 3 — Multi-repo & Org-wide
 

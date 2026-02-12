@@ -71,6 +71,8 @@ export interface JobState {
   triggerCommentId: number;
   startedAt: string;
   updatedAt: string;
+  retryCount?: number;
+  failureReason?: string;
 }
 
 // --- Agent Result ---
@@ -104,6 +106,10 @@ export interface Config {
   maxConcurrentJobs: number;
   workDir: string;
   mongodbUri: string;
+  agentTimeoutMinutes: number;
+  maxRetries: number;
+  dailyTokenBudget: number;
+  hourlyTokenBudget: number;
 }
 
 // --- Pull Request Webhook Payload ---

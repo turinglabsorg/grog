@@ -1,4 +1,7 @@
 import type { Config, Issue, Comment } from "./types.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("github");
 
 const API = "https://api.github.com";
 
@@ -10,13 +13,92 @@ function headers(config: Config) {
   };
 }
 
+// --- Retry logic with exponential backoff ---
+
+interface RetryOptions {
+  maxRetries?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+}
+
+const DEFAULT_RETRY: RetryOptions = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 30000,
+};
+
+function isRetryable(status: number): boolean {
+  // Rate limit (403 with rate limit message), server errors, and 429
+  return status === 403 || status === 429 || status >= 500;
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryDelay(
+  attempt: number,
+  res: Response | null,
+  opts: RetryOptions
+): number {
+  // Check Retry-After header first
+  const retryAfter = res?.headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = parseInt(retryAfter, 10);
+    if (!isNaN(seconds)) return seconds * 1000;
+  }
+
+  // Check x-ratelimit-reset header
+  const resetHeader = res?.headers.get("x-ratelimit-reset");
+  const remaining = res?.headers.get("x-ratelimit-remaining");
+  if (remaining === "0" && resetHeader) {
+    const resetTime = parseInt(resetHeader, 10) * 1000;
+    const waitMs = resetTime - Date.now() + 1000; // +1s buffer
+    if (waitMs > 0 && waitMs < (opts.maxDelayMs ?? 30000)) {
+      return waitMs;
+    }
+  }
+
+  // Exponential backoff with jitter
+  const delay = Math.min(
+    (opts.baseDelayMs ?? 1000) * Math.pow(2, attempt) + Math.random() * 500,
+    opts.maxDelayMs ?? 30000
+  );
+  return delay;
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  opts: RetryOptions = DEFAULT_RETRY
+): Promise<Response> {
+  const maxRetries = opts.maxRetries ?? 3;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, init);
+
+    if (res.ok || !isRetryable(res.status) || attempt === maxRetries) {
+      return res;
+    }
+
+    const delay = getRetryDelay(attempt, res, opts);
+    log.warn(`${init.method ?? "GET"} ${url} → ${res.status}, retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${maxRetries})`);
+    await sleep(delay);
+  }
+
+  // Unreachable, but TypeScript needs it
+  return fetch(url, init);
+}
+
+// --- API functions ---
+
 export async function fetchIssue(
   owner: string,
   repo: string,
   issueNumber: number,
   config: Config
 ): Promise<Issue> {
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${API}/repos/${owner}/${repo}/issues/${issueNumber}`,
     { headers: headers(config) }
   );
@@ -38,7 +120,7 @@ export async function fetchIssueComments(
   let page = 1;
 
   while (true) {
-    const res = await fetch(
+    const res = await fetchWithRetry(
       `${API}/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
       { headers: headers(config) }
     );
@@ -63,7 +145,7 @@ export async function postComment(
   body: string,
   config: Config
 ): Promise<void> {
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${API}/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
     {
       method: "POST",
@@ -85,7 +167,7 @@ export async function addReaction(
   reaction: string,
   config: Config
 ): Promise<void> {
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${API}/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
     {
       method: "POST",
@@ -94,9 +176,7 @@ export async function addReaction(
     }
   );
   if (!res.ok) {
-    console.error(
-      `Failed to add reaction to comment ${commentId}: ${res.status}`
-    );
+    log.error(`Failed to add reaction to comment ${commentId}: ${res.status}`);
   }
 }
 
@@ -106,7 +186,7 @@ export async function closeIssue(
   issueNumber: number,
   config: Config
 ): Promise<void> {
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${API}/repos/${owner}/${repo}/issues/${issueNumber}`,
     {
       method: "PATCH",
@@ -130,7 +210,7 @@ export async function createPullRequest(
   base: string,
   config: Config
 ): Promise<string> {
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${API}/repos/${owner}/${repo}/pulls`,
     {
       method: "POST",
@@ -149,23 +229,23 @@ export async function createPullRequest(
 }
 
 export async function acceptRepoInvitations(config: Config): Promise<void> {
-  const res = await fetch(`${API}/user/repository_invitations`, {
+  const res = await fetchWithRetry(`${API}/user/repository_invitations`, {
     headers: headers(config),
   });
   if (!res.ok) {
-    console.error(`Failed to fetch repo invitations: ${res.status}`);
+    log.error(`Failed to fetch repo invitations: ${res.status}`);
     return;
   }
   const invitations = (await res.json()) as { id: number; repository: { full_name: string } }[];
   for (const inv of invitations) {
-    const acceptRes = await fetch(
+    const acceptRes = await fetchWithRetry(
       `${API}/user/repository_invitations/${inv.id}`,
       { method: "PATCH", headers: headers(config) }
     );
     if (acceptRes.ok) {
-      console.log(`[github] Accepted invitation for ${inv.repository.full_name}`);
+      log.info(`Accepted invitation for ${inv.repository.full_name}`);
     } else {
-      console.error(`[github] Failed to accept invitation ${inv.id}: ${acceptRes.status}`);
+      log.error(`Failed to accept invitation ${inv.id}: ${acceptRes.status}`);
     }
   }
 }

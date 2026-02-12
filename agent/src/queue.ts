@@ -1,4 +1,7 @@
 import type { QueuedJob } from "./types.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("queue");
 
 type JobHandler = (job: QueuedJob) => Promise<void>;
 
@@ -15,9 +18,7 @@ export class JobQueue {
 
   enqueue(job: QueuedJob): void {
     this.queue.push(job);
-    console.log(
-      `[queue] Enqueued job for ${job.owner}/${job.repo}#${job.issueNumber} (queue size: ${this.queue.length}, running: ${this.running})`
-    );
+    log.info(`Enqueued ${job.owner}/${job.repo}#${job.issueNumber} (queue: ${this.queue.length}, running: ${this.running})`);
     this.processNext();
   }
 
@@ -34,22 +35,15 @@ export class JobQueue {
 
     const job = this.queue.shift()!;
     this.running++;
-    console.log(
-      `[queue] Starting job for ${job.owner}/${job.repo}#${job.issueNumber} (running: ${this.running})`
-    );
+    log.info(`Starting ${job.owner}/${job.repo}#${job.issueNumber} (running: ${this.running})`);
 
     this.handler(job)
       .catch((err) => {
-        console.error(
-          `[queue] Job failed for ${job.owner}/${job.repo}#${job.issueNumber}:`,
-          err
-        );
+        log.error(`Job failed for ${job.owner}/${job.repo}#${job.issueNumber}: ${(err as Error).message ?? err}`);
       })
       .finally(() => {
         this.running--;
-        console.log(
-          `[queue] Job finished for ${job.owner}/${job.repo}#${job.issueNumber} (running: ${this.running})`
-        );
+        log.info(`Job finished for ${job.owner}/${job.repo}#${job.issueNumber} (running: ${this.running})`);
         this.processNext();
       });
   }
