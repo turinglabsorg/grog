@@ -20,7 +20,9 @@ export function App() {
   return (
     <>
       <Header user={user} />
-      <div className={styles.hero}>
+
+      {/* Hero */}
+      <section className={styles.hero}>
         <img src="/logo.png" alt="Grog" className={styles.mascot} />
         <div className={styles.title}>GROG</div>
         <div className={styles.sub}>
@@ -55,7 +57,200 @@ export function App() {
             </div>
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* How it works */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>How It Works</h2>
+        <p className={styles.sectionSub}>
+          Grog turns GitHub issues into pull requests. No human in the loop &mdash; just tag the bot and walk away.
+        </p>
+
+        <div className={styles.flow}>
+          <div className={styles.flowStep}>
+            <div className={styles.flowNumber}>1</div>
+            <div className={styles.flowLabel}>Mention</div>
+            <div className={styles.flowDesc}>
+              Comment <span className={styles.code}>@grog-agent solve this</span> on any GitHub issue.
+              The webhook fires instantly.
+            </div>
+          </div>
+          <div className={styles.flowArrow}>&rarr;</div>
+          <div className={styles.flowStep}>
+            <div className={styles.flowNumber}>2</div>
+            <div className={styles.flowLabel}>Clone & Analyze</div>
+            <div className={styles.flowDesc}>
+              The agent clones the repo, reads the issue context, explores the codebase,
+              and builds an understanding of what needs to change.
+            </div>
+          </div>
+          <div className={styles.flowArrow}>&rarr;</div>
+          <div className={styles.flowStep}>
+            <div className={styles.flowNumber}>3</div>
+            <div className={styles.flowLabel}>Code & Fix</div>
+            <div className={styles.flowDesc}>
+              Claude writes the code, runs tests, iterates on errors, and commits
+              the changes to a dedicated branch.
+            </div>
+          </div>
+          <div className={styles.flowArrow}>&rarr;</div>
+          <div className={styles.flowStep}>
+            <div className={styles.flowNumber}>4</div>
+            <div className={styles.flowLabel}>Open PR</div>
+            <div className={styles.flowDesc}>
+              A pull request is opened with a summary of changes, linked to the original issue.
+              Review and merge when ready.
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.flowDiagram}>
+          <pre className={styles.pre}>{`  @grog-agent[bot] solve this
+          |
+          v
+  GitHub Webhook ──> Agent Server ──> MongoDB ──> Claude ──> PR`}</pre>
+        </div>
+      </section>
+
+      {/* What it can do */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>What Grog Can Do</h2>
+        <p className={styles.sectionSub}>
+          From simple bug fixes to multi-file refactors &mdash; if it's described in an issue, Grog will take a shot at it.
+        </p>
+
+        <div className={styles.capabilities}>
+          <div className={styles.capability}>
+            <div className={styles.capIcon}>&#x1f41b;</div>
+            <div className={styles.capTitle}>Bug Fixes</div>
+            <div className={styles.capDesc}>Reads error logs and stack traces from the issue, traces the root cause through the code, and patches it.</div>
+          </div>
+          <div className={styles.capability}>
+            <div className={styles.capIcon}>&#x2728;</div>
+            <div className={styles.capTitle}>New Features</div>
+            <div className={styles.capDesc}>Implements functionality described in the issue &mdash; new endpoints, UI components, CLI flags, database migrations.</div>
+          </div>
+          <div className={styles.capability}>
+            <div className={styles.capIcon}>&#x1f504;</div>
+            <div className={styles.capTitle}>Refactoring</div>
+            <div className={styles.capDesc}>Restructures code, renames modules, extracts shared utilities, updates imports across the project.</div>
+          </div>
+          <div className={styles.capability}>
+            <div className={styles.capIcon}>&#x1f9ea;</div>
+            <div className={styles.capTitle}>Tests</div>
+            <div className={styles.capDesc}>Writes unit and integration tests, fixes broken test suites, adds missing coverage.</div>
+          </div>
+          <div className={styles.capability}>
+            <div className={styles.capIcon}>&#x1f4ac;</div>
+            <div className={styles.capTitle}>Follow-ups</div>
+            <div className={styles.capDesc}>If something is unclear, Grog asks a question on the issue. Reply and it picks up where it left off.</div>
+          </div>
+          <div className={styles.capability}>
+            <div className={styles.capIcon}>&#x1f680;</div>
+            <div className={styles.capTitle}>Auto-solve</div>
+            <div className={styles.capDesc}>Enable auto-solve on a repo and every new issue gets picked up automatically &mdash; no mention needed.</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Architecture */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Architecture</h2>
+        <p className={styles.sectionSub}>
+          A TypeScript monorepo with clear separation between the self-hosted agent, the SaaS platform, and shared infrastructure.
+        </p>
+
+        <div className={styles.archGrid}>
+          <div className={styles.archCard}>
+            <div className={styles.archName}>shared/</div>
+            <div className={styles.archRole}>Core Library</div>
+            <div className={styles.archDesc}>
+              Types, MongoDB state manager, GitHub API client, GitHub App auth (JWT + installation tokens),
+              budget tracking, logging, and crypto utilities. Every other package depends on this.
+            </div>
+          </div>
+          <div className={styles.archCard}>
+            <div className={styles.archName}>agent/</div>
+            <div className={styles.archRole}>Self-Hosted Agent</div>
+            <div className={styles.archDesc}>
+              Express server with built-in terminal dashboard. Receives webhooks, queues jobs in MongoDB,
+              spawns Claude Code processes, streams output via SSE, pushes branches, and opens PRs.
+              Includes stop/start controls, token budget tracking, and GitHub App setup wizard.
+            </div>
+          </div>
+          <div className={styles.archCard}>
+            <div className={styles.archName}>api/</div>
+            <div className={styles.archRole}>SaaS API</div>
+            <div className={styles.archDesc}>
+              REST API for the hosted platform. GitHub OAuth login, per-repo webhook setup with unique secrets,
+              Stripe billing integration (credit packs, checkout sessions, webhooks), admin endpoints,
+              CSRF protection, and rate limiting.
+            </div>
+          </div>
+          <div className={styles.archCard}>
+            <div className={styles.archName}>app/</div>
+            <div className={styles.archRole}>SaaS Frontend</div>
+            <div className={styles.archDesc}>
+              React + Vite + TypeScript. Landing page, GitHub login, billing dashboard with credit balance,
+              pack purchasing via Stripe Checkout, and transaction history.
+            </div>
+          </div>
+          <div className={styles.archCard}>
+            <div className={styles.archName}>skill/</div>
+            <div className={styles.archRole}>CLI Skills</div>
+            <div className={styles.archDesc}>
+              Claude Code slash commands for local workflows.
+              <span className={styles.code}>/grog-solve</span> fetches an issue and solves it in your working directory.
+              <span className={styles.code}>/grog-explore</span> scans a repo's open issues.
+              <span className={styles.code}>/grog-review</span> reviews a pull request.
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.flowDiagram}>
+          <pre className={styles.pre}>{`┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   GitHub     │     │   MongoDB   │     │   Stripe    │
+│  (webhooks)  │     │  (state)    │     │  (billing)  │
+└──────┬───────┘     └──────┬──────┘     └──────┬──────┘
+       │                    │                    │
+       v                    v                    v
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   agent/    │────>│  shared/    │<────│    api/     │
+│  (runner)   │     │  (core)     │     │  (billing)  │
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+                                        ┌──────┴──────┐
+                                        │    app/     │
+                                        │  (React UI) │
+                                        └─────────────┘`}</pre>
+        </div>
+      </section>
+
+      {/* Deployment modes */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Two Ways to Run</h2>
+
+        <div className={styles.modes}>
+          <div className={styles.mode}>
+            <div className={styles.modeTitle}>Self-Hosted</div>
+            <div className={styles.modeDesc}>
+              Run the agent on your own server. Create a GitHub App, connect it through the built-in dashboard,
+              and you're live. No external dependencies beyond MongoDB and an Anthropic API key.
+              Full control over your data, your repos, and your budget.
+            </div>
+            <div className={styles.modeStack}>agent + shared + MongoDB</div>
+          </div>
+          <div className={styles.mode}>
+            <div className={styles.modeTitle}>Hosted SaaS</div>
+            <div className={styles.modeDesc}>
+              Sign in with GitHub, pick your repos, and buy credits. We handle the infrastructure,
+              scaling, and agent management. Pay per token usage &mdash; 1 credit covers 10,000 tokens.
+              No server setup, no API keys to manage.
+            </div>
+            <div className={styles.modeStack}>app + api + agent + shared + MongoDB + Stripe</div>
+          </div>
+        </div>
+      </section>
 
       <footer className={styles.footer}>grog &mdash; built by <a href="https://turinglabs.org" target="_blank" rel="noopener noreferrer">turinglabs</a></footer>
     </>

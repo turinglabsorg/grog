@@ -1,12 +1,11 @@
 .hero {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 60px 24px;
-  min-height: calc(100vh - 100px);
+  padding: 80px 24px 60px;
+  min-height: calc(100vh - 60px);
 }
 
 .mascot {
@@ -76,6 +75,264 @@
 .prompt {
   color: #22c55e;
 }
+
+/* --- Sections --- */
+
+.section {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 60px 24px;
+  border-top: 1px solid #21262d;
+}
+
+.sectionTitle {
+  font-size: 24px;
+  font-weight: 700;
+  color: #c9d1d9;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.sectionSub {
+  font-size: 14px;
+  color: #8b949e;
+  text-align: center;
+  max-width: 600px;
+  margin: 0 auto 40px;
+  line-height: 1.7;
+}
+
+.code {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: #58a6ff;
+  font-family: inherit;
+}
+
+/* --- Flow --- */
+
+.flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin-bottom: 40px;
+}
+
+.flowStep {
+  flex: 1;
+  text-align: center;
+  padding: 0 12px;
+}
+
+.flowNumber {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #58a6ff;
+  color: #0d1117;
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 12px;
+}
+
+.flowLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: #c9d1d9;
+  margin-bottom: 8px;
+}
+
+.flowDesc {
+  font-size: 12px;
+  color: #484f58;
+  line-height: 1.6;
+}
+
+.flowArrow {
+  color: #30363d;
+  font-size: 24px;
+  padding-top: 6px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 700px) {
+  .flow {
+    flex-direction: column;
+    gap: 20px;
+  }
+  .flowArrow {
+    transform: rotate(90deg);
+    align-self: center;
+    padding: 0;
+  }
+}
+
+.flowDiagram {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 24px;
+  overflow-x: auto;
+}
+
+.pre {
+  color: #8b949e;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  font-family: inherit;
+  white-space: pre;
+}
+
+/* --- Capabilities --- */
+
+.capabilities {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 700px) {
+  .capabilities {
+    grid-template-columns: 1fr;
+  }
+}
+
+.capability {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.capIcon {
+  font-size: 24px;
+  margin-bottom: 10px;
+}
+
+.capTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #c9d1d9;
+  margin-bottom: 6px;
+}
+
+.capDesc {
+  font-size: 12px;
+  color: #484f58;
+  line-height: 1.6;
+}
+
+/* --- Architecture --- */
+
+.archGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+@media (max-width: 640px) {
+  .archGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.archCard {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.archCard:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  max-width: 50%;
+  justify-self: center;
+}
+
+@media (max-width: 640px) {
+  .archCard:last-child:nth-child(odd) {
+    max-width: 100%;
+  }
+}
+
+.archName {
+  font-size: 15px;
+  font-weight: 700;
+  color: #58a6ff;
+  font-family: inherit;
+  margin-bottom: 2px;
+}
+
+.archRole {
+  font-size: 11px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.archDesc {
+  font-size: 12px;
+  color: #484f58;
+  line-height: 1.6;
+}
+
+/* --- Deployment modes --- */
+
+.modes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .modes {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mode {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.modeTitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: #c9d1d9;
+  margin-bottom: 12px;
+}
+
+.modeDesc {
+  font-size: 13px;
+  color: #8b949e;
+  line-height: 1.7;
+  margin-bottom: 16px;
+}
+
+.modeStack {
+  font-size: 11px;
+  color: #58a6ff;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  padding: 6px 10px;
+  display: inline-block;
+  font-family: inherit;
+}
+
+/* --- Footer --- */
 
 .footer {
   padding: 16px 24px;

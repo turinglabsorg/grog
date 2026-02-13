@@ -62,7 +62,7 @@
   align-items: center;
   gap: 8px;
   background: #21262d;
-  color: #c9d1d9;
+  color: #8b949e;
   border: 1px solid #30363d;
   border-radius: 6px;
   padding: 8px 16px;
@@ -70,10 +70,20 @@
   font-weight: 600;
   text-decoration: none;
   font-family: inherit;
+  cursor: default;
+  position: relative;
 }
-.loginBtn:hover {
-  background: #30363d;
-  text-decoration: none;
+
+.comingSoon {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #58a6ff;
+  background: rgba(88, 166, 255, 0.1);
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: 2px;
 }
 
 .logout {
