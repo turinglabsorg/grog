@@ -1,17 +1,26 @@
 import express from "express";
-import { loadConfig } from "./config.js";
+import {
+  loadConfig,
+  StateManager,
+  TokenBudget,
+  createLogger,
+  acceptRepoInvitations,
+  fetchIssue,
+  closeIssue,
+  getBuffer,
+  subscribe,
+  getInstallationToken,
+  clearTokenCache,
+  getAppInfo,
+  listInstallations,
+  checkRateLimit,
+} from "@grog/shared";
+import type { Config, JobState, JobStatus, QueuedJob, RepoConfig, AppConfig } from "@grog/shared";
+import { runAgent, stopJob } from "./runner.js";
 import { createWebhookHandler } from "./webhook.js";
-import { JobQueue } from "./queue.js";
-import { StateManager } from "./state.js";
-import { runAgent } from "./runner.js";
 import { renderDashboard } from "./dashboard.js";
-import { getBuffer, subscribe } from "./outputStore.js";
-import { closeIssue, acceptRepoInvitations, fetchIssue } from "./github.js";
-import { createLogger } from "./logger.js";
-import { TokenBudget } from "./budget.js";
-import type { Config, JobStatus, RepoConfig } from "./types.js";
 
-const log = createLogger("server");
+const log = createLogger("agent");
 
 async function syncJobsWithGitHub(state: StateManager, config: Config) {
   const activeJobs = await state.listActiveJobs();
@@ -32,7 +41,6 @@ async function syncJobsWithGitHub(state: StateManager, config: Config) {
         job.updatedAt = new Date().toISOString();
         await state.upsertJob(job);
       } else if (job.status === "working") {
-        // Skip if recently updated — likely still running in a CLI worker
         const ageMs = Date.now() - new Date(job.updatedAt).getTime();
         if (ageMs < 5 * 60 * 1000) {
           log.info(`${job.owner}/${job.repo}#${job.issueNumber} is working (updated ${Math.round(ageMs / 1000)}s ago) — skipping`);
@@ -51,42 +59,55 @@ async function syncJobsWithGitHub(state: StateManager, config: Config) {
   log.info("Reconciliation complete");
 }
 
+/** Refresh the ghToken from the GitHub App installation token. */
+async function refreshAppToken(config: Config, appConfig: AppConfig): Promise<void> {
+  const token = await getInstallationToken(
+    appConfig.appId,
+    appConfig.privateKey,
+    appConfig.installationId
+  );
+  config.ghToken = token;
+}
+
 async function main() {
   const config = loadConfig();
   const state = await StateManager.connect(config.mongodbUri);
 
+  // --- Check for GitHub App config in DB ---
+  let appConfig = await state.getAppConfig();
+  let configured = false;
+
+  if (appConfig) {
+    // App mode — generate installation token
+    try {
+      await refreshAppToken(config, appConfig);
+      config.botUsername = appConfig.botUsername;
+      config.webhookSecret = appConfig.webhookSecret || config.webhookSecret;
+      configured = true;
+      log.info(`GitHub App connected: ${appConfig.botUsername} (app ${appConfig.appId})`);
+    } catch (err) {
+      log.error(`Failed to get installation token: ${(err as Error).message}`);
+      log.warn("Starting in setup mode — configure the app via the dashboard");
+    }
+  } else if (config.ghToken) {
+    // Legacy PAT mode
+    configured = true;
+    log.info("Using legacy GH_TOKEN (PAT mode)");
+  } else {
+    log.warn("No GitHub App or GH_TOKEN configured — starting in setup mode");
+  }
+
   // Reconcile local jobs with GitHub issue state before accepting new work
-  await syncJobsWithGitHub(state, config);
+  if (configured) {
+    await syncJobsWithGitHub(state, config);
+  }
 
   const budget = new TokenBudget(config, state);
 
-  const queue = new JobQueue(config.maxConcurrentJobs, async (job) => {
-    // Check token budget before running
-    if (!(await budget.canRun())) {
-      const jobId = `${job.owner}/${job.repo}#${job.issueNumber}`;
-      log.warn(`Token budget exceeded — skipping ${jobId}`);
-      const jobState = await state.getJobById(jobId);
-      if (jobState) {
-        jobState.status = "queued";
-        jobState.updatedAt = new Date().toISOString();
-        await state.upsertJob(jobState);
-      }
-      return;
-    }
+  let running = 0;
+  let shuttingDown = false;
 
-    await runAgent(job, config, state);
-
-    // Check if the job was marked for retry
-    const jobId = `${job.owner}/${job.repo}#${job.issueNumber}`;
-    const jobState = await state.getJobById(jobId);
-    if (jobState && jobState.status === "queued" && (jobState.retryCount ?? 0) > 0) {
-      log.info(`Re-enqueueing ${jobId} for retry (attempt ${jobState.retryCount})`);
-      // Delay retry by 10 seconds to avoid hammering
-      await new Promise((r) => setTimeout(r, 10000));
-      queue.enqueue(job);
-    }
-  });
-
+  // --- Express server ---
   const app = express();
 
   // Parse JSON body but also keep raw body for HMAC verification
@@ -100,12 +121,12 @@ async function main() {
   );
 
   // Webhook endpoint
-  app.post("/webhook", createWebhookHandler(config, queue, state));
+  app.post("/webhook", createWebhookHandler(config, state));
 
   // Health check
   app.get("/health", async (_req, res) => {
     const budgetStatus = await budget.getStatus();
-    res.json({ status: "ok", queue: queue.stats, budget: budgetStatus });
+    res.json({ status: "ok", running, budget: budgetStatus });
   });
 
   // Token budget status
@@ -113,7 +134,7 @@ async function main() {
     res.json(await budget.getStatus());
   });
 
-  // List active jobs
+  // List jobs
   app.get("/jobs", async (_req, res) => {
     res.json(await state.listJobs());
   });
@@ -143,19 +164,19 @@ async function main() {
 
     // Check if job is in a terminal state
     const job = await state.getJobById(jobId);
-    const terminalStatuses = ["pr_opened", "completed", "failed", "closed"];
+    const terminalStatuses = ["pr_opened", "completed", "failed", "closed", "stopped"];
     if (!job || terminalStatuses.includes(job.status)) {
       res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
       res.end();
       return;
     }
 
-    // Subscribe to in-memory updates (works when agent runs in same process)
+    // Subscribe to in-memory updates
     const unsub = subscribe(jobId, (line) => {
       res.write(`data: ${JSON.stringify(line)}\n\n`);
     });
 
-    // Poll MongoDB for new logs (works when agent runs in separate process)
+    // Poll MongoDB for new logs (works across processes)
     let lastLogCount = memBuffer.length || (await state.getJobLogs(jobId)).length;
     const pollInterval = setInterval(async () => {
       try {
@@ -193,7 +214,7 @@ async function main() {
     res.json(logs);
   });
 
-  // Update job status (drag-and-drop)
+  // Update job status
   const ALLOWED_TARGET_STATUSES: JobStatus[] = ["queued", "completed", "failed", "closed"];
 
   app.patch("/jobs/:id/status", async (req, res) => {
@@ -227,8 +248,49 @@ async function main() {
     res.json(job);
   });
 
-  // --- Repo Config API ---
+  // Stop a running job — kill Claude process, mark as stopped
+  app.post("/jobs/:id/stop", async (req, res) => {
+    const jobId = decodeURIComponent(req.params.id);
+    const job = await state.getJobById(jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
 
+    // Kill the Claude process if running
+    stopJob(jobId);
+
+    job.status = "stopped";
+    job.updatedAt = new Date().toISOString();
+    await state.upsertJob(job);
+
+    log.info(`Job ${jobId} stopped by user`);
+    res.json(job);
+  });
+
+  // Start a stopped job — requeue it so the poll loop picks it up
+  app.post("/jobs/:id/start", async (req, res) => {
+    const jobId = decodeURIComponent(req.params.id);
+    const job = await state.getJobById(jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    if (job.status !== "stopped") {
+      res.status(400).json({ error: `Job is not stopped (current: ${job.status})` });
+      return;
+    }
+
+    job.status = "queued";
+    job.updatedAt = new Date().toISOString();
+    await state.upsertJob(job);
+
+    log.info(`Job ${jobId} restarted by user`);
+    res.json(job);
+  });
+
+  // Repo config API
   app.get("/repos", async (_req, res) => {
     res.json(await state.listRepoConfigs());
   });
@@ -279,64 +341,295 @@ async function main() {
     res.json({ deleted: true, id });
   });
 
-  // --- Admin API ---
+  // --- GitHub App config API ---
 
-  app.get("/admin/stats", async (_req, res) => {
-    res.json(await state.getStats());
+  app.get("/config/app", async (_req, res) => {
+    const ac = await state.getAppConfig();
+    if (!ac) {
+      res.json({ configured: false });
+      return;
+    }
+    // Never expose the private key to the frontend
+    res.json({
+      configured: true,
+      appId: ac.appId,
+      installationId: ac.installationId,
+      botUsername: ac.botUsername,
+      webhookSecret: ac.webhookSecret ? "***" : "",
+      createdAt: ac.createdAt,
+      updatedAt: ac.updatedAt,
+    });
   });
 
-  app.post("/admin/jobs/bulk-update", async (req, res) => {
-    const { filter, status } = req.body as {
-      filter: { status?: string; owner?: string; repo?: string };
-      status: string;
+  app.post("/config/app", async (req, res) => {
+    const { appId, privateKey, webhookSecret } = req.body as {
+      appId?: string;
+      privateKey?: string;
+      webhookSecret?: string;
     };
 
-    if (!status || !["queued", "completed", "failed", "closed"].includes(status)) {
-      res.status(400).json({ error: `Invalid target status: ${status}` });
+    if (!appId || !privateKey) {
+      res.status(400).json({ error: "appId and privateKey are required" });
       return;
     }
 
-    const count = await state.bulkUpdateJobStatus(filter ?? {}, status as JobStatus);
-    log.info(`Bulk update: ${count} jobs → ${status}`);
-    res.json({ updated: count, status });
+    // Validate: get app info
+    let appInfo;
+    try {
+      appInfo = await getAppInfo(appId, privateKey);
+    } catch (err) {
+      res.status(400).json({ error: `Invalid App ID or private key: ${(err as Error).message}` });
+      return;
+    }
+
+    // Find installation
+    let installations;
+    try {
+      installations = await listInstallations(appId, privateKey);
+    } catch (err) {
+      res.status(400).json({ error: `Failed to list installations: ${(err as Error).message}` });
+      return;
+    }
+
+    if (installations.length === 0) {
+      res.status(400).json({ error: "No installations found. Install the app on your GitHub org/account first." });
+      return;
+    }
+
+    // Use first installation (most common for self-hosted)
+    const installation = installations[0];
+    const botUsername = `${appInfo.slug}[bot]`;
+
+    // Generate a test token to verify it works
+    let token;
+    try {
+      clearTokenCache();
+      token = await getInstallationToken(appId, privateKey, installation.id);
+    } catch (err) {
+      res.status(400).json({ error: `Failed to generate installation token: ${(err as Error).message}` });
+      return;
+    }
+
+    // Check rate limit to verify token is healthy
+    const rateLimit = await checkRateLimit(token);
+
+    const now = new Date().toISOString();
+    const newConfig: AppConfig = {
+      id: "github-app",
+      appId,
+      privateKey,
+      installationId: installation.id,
+      webhookSecret: webhookSecret || config.webhookSecret,
+      botUsername,
+      createdAt: appConfig?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    await state.saveAppConfig(newConfig);
+    appConfig = newConfig;
+
+    // Apply immediately
+    config.ghToken = token;
+    config.botUsername = botUsername;
+    config.webhookSecret = newConfig.webhookSecret;
+    configured = true;
+
+    log.info(`GitHub App configured: ${botUsername} (app ${appId}, installation ${installation.id})`);
+
+    res.json({
+      configured: true,
+      appId,
+      botUsername,
+      installationId: installation.id,
+      installationAccount: installation.account.login,
+      rateLimit: { limit: rateLimit.limit, remaining: rateLimit.remaining },
+    });
   });
 
-  app.delete("/admin/jobs", async (req, res) => {
-    const days = parseInt(req.query.olderThanDays as string, 10);
-    if (isNaN(days) || days < 1) {
-      res.status(400).json({ error: "olderThanDays must be >= 1" });
-      return;
-    }
-    const count = await state.purgeJobs(days);
-    log.info(`Purged ${count} old jobs (older than ${days} days)`);
-    res.json({ purged: count, olderThanDays: days });
+  app.delete("/config/app", async (_req, res) => {
+    await state.deleteAppConfig();
+    clearTokenCache();
+    appConfig = undefined;
+
+    // Revert to PAT if available
+    const envToken = process.env.GH_TOKEN ?? "";
+    config.ghToken = envToken;
+    configured = !!envToken;
+
+    log.info("GitHub App config removed");
+    res.json({ configured, mode: configured ? "pat" : "setup" });
   });
 
   // Dashboard
+  app.get("/", async (_req, res) => {
+    const jobs = await state.listJobs();
+    res.type("html").send(renderDashboard(jobs, configured));
+  });
+
   app.get("/dashboard", async (_req, res) => {
     const jobs = await state.listJobs();
-    res.type("html").send(renderDashboard(jobs));
+    res.type("html").send(renderDashboard(jobs, configured));
   });
 
   app.listen(config.port, () => {
-    log.info(`Grog agent server listening on port ${config.port}`);
+    log.info(`Grog agent listening on port ${config.port}`);
     log.info(`Bot username: @${config.botUsername}`);
     log.info(`Max concurrent jobs: ${config.maxConcurrentJobs}`);
     log.info(`Work directory: ${config.workDir}`);
+  });
 
-    // Auto-accept repository invitations
+  // --- Token refresh for App mode (every 45 minutes) ---
+  const tokenRefreshInterval = setInterval(async () => {
+    if (shuttingDown || !appConfig) return;
+    try {
+      await refreshAppToken(config, appConfig);
+    } catch (err) {
+      log.error(`Token refresh failed: ${(err as Error).message}`);
+    }
+  }, 45 * 60_000);
+
+  // --- Auto-accept repository invitations (PAT mode only — Apps don't need this) ---
+  const invitationTimeout = setTimeout(() => {
+    if (!configured || appConfig) return;
     acceptRepoInvitations(config).catch((err) =>
       log.error(`Initial invitation accept failed: ${err}`)
     );
-    setInterval(() => {
-      acceptRepoInvitations(config).catch((err) =>
-        log.error(`Periodic invitation accept failed: ${err}`)
-      );
-    }, 60_000);
-  });
+  }, 10_000);
+  const invitationInterval = setInterval(() => {
+    if (!configured || appConfig) return;
+    acceptRepoInvitations(config).catch((err) =>
+      log.error(`Periodic invitation accept failed: ${err}`)
+    );
+  }, 5 * 60_000);
+
+  // --- Stale job recovery — every 5 minutes (1.9) ---
+  const staleRecoveryInterval = setInterval(async () => {
+    if (shuttingDown || !configured) return;
+    try {
+      await state.recoverStaleJobs(config.agentTimeoutMinutes + 5);
+    } catch (err) {
+      log.error(`Stale job recovery failed: ${(err as Error).message}`);
+    }
+  }, 5 * 60_000);
+
+  // --- Poll loop ---
+  const pollInterval = setInterval(async () => {
+    if (shuttingDown || !configured) return;
+    if (running >= config.maxConcurrentJobs) return;
+
+    try {
+      // Check token budget before claiming
+      if (!(await budget.canRun())) {
+        return;
+      }
+
+      const job = await state.claimNextJob();
+      if (!job) return;
+
+      running++;
+      log.info(`Claimed job ${job.id} (running: ${running}/${config.maxConcurrentJobs})`);
+
+      // Build the QueuedJob from the claimed JobState
+      const queuedJob = await buildQueuedJob(job, config, state);
+      if (!queuedJob) {
+        running--;
+        return;
+      }
+
+      // Run in background (don't await — allows concurrent jobs)
+      runAgent(queuedJob, config, state)
+        .then(async () => {
+          const jobState = await state.getJobById(job.id);
+          if (jobState && jobState.status === "queued" && (jobState.retryCount ?? 0) > 0) {
+            log.info(`Job ${job.id} marked for retry (attempt ${jobState.retryCount})`);
+          }
+        })
+        .catch((err) => {
+          log.error(`Job ${job.id} failed: ${(err as Error).message}`);
+        })
+        .finally(() => {
+          running--;
+          log.info(`Job ${job.id} finished (running: ${running}/${config.maxConcurrentJobs})`);
+        });
+    } catch (err) {
+      log.error(`Poll error: ${(err as Error).message}`);
+    }
+  }, 2000);
+
+  // --- Graceful shutdown ---
+  async function shutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info(`Received ${signal} — shutting down gracefully`);
+
+    clearInterval(pollInterval);
+    clearTimeout(invitationTimeout);
+    clearInterval(invitationInterval);
+    clearInterval(staleRecoveryInterval);
+    clearInterval(tokenRefreshInterval);
+
+    // Wait for running jobs to finish (up to 60s)
+    const deadline = Date.now() + 60_000;
+    while (running > 0 && Date.now() < deadline) {
+      log.info(`Waiting for ${running} running job(s) to finish...`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    if (running > 0) {
+      log.warn(`${running} job(s) still running after timeout — exiting anyway`);
+    }
+
+    log.info("Agent stopped");
+    process.exit(0);
+  }
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+}
+
+async function buildQueuedJob(
+  job: JobState,
+  config: Config,
+  state: StateManager
+): Promise<QueuedJob | null> {
+  try {
+    const repoRes = await fetch(
+      `https://api.github.com/repos/${job.owner}/${job.repo}`,
+      {
+        headers: {
+          Authorization: `token ${config.ghToken}`,
+          Accept: "application/vnd.github+json",
+        },
+      }
+    );
+
+    let defaultBranch = "main";
+    if (repoRes.ok) {
+      const repoData = (await repoRes.json()) as { default_branch: string };
+      defaultBranch = repoData.default_branch;
+    }
+
+    return {
+      owner: job.owner,
+      repo: job.repo,
+      issueNumber: job.issueNumber,
+      commentId: job.triggerCommentId,
+      commentBody: "",
+      defaultBranch,
+    };
+  } catch (err) {
+    log.error(`Failed to build queued job for ${job.id}: ${(err as Error).message}`);
+
+    job.status = "failed";
+    job.failureReason = `Failed to fetch issue: ${(err as Error).message}`.slice(0, 200);
+    job.updatedAt = new Date().toISOString();
+    await state.upsertJob(job);
+
+    return null;
+  }
 }
 
 main().catch((err) => {
-  log.error(`Failed to start Grog: ${err}`);
+  log.error(`Failed to start Grog agent: ${err}`);
   process.exit(1);
 });

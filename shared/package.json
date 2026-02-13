@@ -1,0 +1,20 @@
+{
+  "name": "@grog/shared",
+  "version": "1.0.0",
+  "description": "Shared types, config, state, and utilities for Grog",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "mongodb": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.12.0",
+    "typescript": "^5.7.3"
+  }
+}

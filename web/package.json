@@ -1,7 +1,7 @@
 {
-  "name": "@grog/agent",
+  "name": "@grog/web",
   "version": "1.0.0",
-  "description": "Grog agent worker: polls MongoDB and runs Claude agents",
+  "description": "Grog web server: dashboard, API, and webhook receiver",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@grog/shared": "*",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "stripe": "^17.0.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

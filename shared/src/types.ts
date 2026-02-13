@@ -56,7 +56,8 @@ export type JobStatus =
   | "pr_opened"
   | "completed"
   | "failed"
-  | "closed";
+  | "closed"
+  | "stopped";
 
 export interface JobState {
   id: string;
@@ -73,6 +74,7 @@ export interface JobState {
   updatedAt: string;
   retryCount?: number;
   failureReason?: string;
+  userId?: number;
 }
 
 // --- Agent Result ---
@@ -96,9 +98,23 @@ export interface QueuedJob {
   defaultBranch: string;
 }
 
+// --- GitHub App Config (stored in DB) ---
+
+export interface AppConfig {
+  id: "github-app";
+  appId: string;
+  privateKey: string;
+  installationId: number;
+  webhookSecret: string;
+  botUsername: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // --- Config ---
 
 export interface Config {
+  /** GitHub token — empty string when in setup mode (populated dynamically from App auth) */
   ghToken: string;
   webhookSecret: string;
   botUsername: string;
@@ -110,6 +126,38 @@ export interface Config {
   maxRetries: number;
   dailyTokenBudget: number;
   hourlyTokenBudget: number;
+  githubClientId: string;
+  githubClientSecret: string;
+  sessionSecret: string;
+  baseUrl: string;
+  adminGithubIds: number[];
+  stripeSecretKey: string;
+  stripeWebhookSecret: string;
+  billingEnabled: boolean;
+}
+
+// --- Auth / Users ---
+
+export interface GrogUser {
+  githubId: number;
+  login: string;
+  accessToken: string;
+  avatarUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebhookRegistration {
+  /** owner/repo */
+  repoId: string;
+  /** The unique webhook secret for this repo */
+  webhookSecret: string;
+  /** GitHub user who set it up */
+  userId: number;
+  userLogin: string;
+  /** GitHub webhook ID (for management) */
+  webhookId: number;
+  createdAt: string;
 }
 
 // --- Repo Config ---
@@ -163,3 +211,36 @@ export interface PullRequestPayload {
   };
   repository: Repository;
 }
+
+// --- Credits / Billing ---
+
+export interface CreditBalance {
+  userId: number;
+  credits: number;
+  lifetimePurchased: number;
+  lifetimeUsed: number;
+  updatedAt: string;
+}
+
+export interface CreditTransaction {
+  id: string;
+  userId: number;
+  type: "purchase" | "deduction" | "refund" | "grant";
+  amount: number;
+  balanceAfter: number;
+  stripeSessionId?: string;
+  jobId?: string;
+  tokensConsumed?: number;
+  description: string;
+  createdAt: string;
+}
+
+export interface CreditPack {
+  id: string;
+  credits: number;
+  priceUsd: number;
+  stripePriceId: string;
+  label: string;
+}
+
+export const TOKENS_PER_CREDIT = 10_000;

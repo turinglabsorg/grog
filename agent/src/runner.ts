@@ -2,21 +2,36 @@ import { spawn, execSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
-import type { Config, QueuedJob, AgentResult, JobState } from "./types.js";
+import type { Config, QueuedJob, AgentResult, JobState, OutputLine } from "@grog/shared";
 import {
+  StateManager,
   fetchIssue,
   fetchIssueComments,
   postComment,
   addReaction,
   createPullRequest,
-} from "./github.js";
-import { StateManager } from "./state.js";
+  pushLine,
+  cleanup,
+  createLogger,
+  TOKENS_PER_CREDIT,
+} from "@grog/shared";
 import { buildSolvePrompt } from "./prompt.js";
-import { pushLine, cleanup } from "./outputStore.js";
-import type { OutputLine } from "./outputStore.js";
-import { createLogger } from "./logger.js";
 
 const log = createLogger("runner");
+
+// Track active Claude processes so we can kill them on stop
+const activeProcesses = new Map<string, { kill: () => void }>();
+
+/** Stop a running job by killing its Claude process. Returns true if a process was found. */
+export function stopJob(jobId: string): boolean {
+  const entry = activeProcesses.get(jobId);
+  if (entry) {
+    entry.kill();
+    activeProcesses.delete(jobId);
+    return true;
+  }
+  return false;
+}
 
 function makeJobId(owner: string, repo: string, issueNumber: number): string {
   return `${owner}/${repo}#${issueNumber}`;
@@ -49,7 +64,8 @@ function spawnClaude(
   prompt: string,
   cwd: string,
   timeoutMs: number,
-  onEvent?: (event: any) => void
+  onEvent?: (event: any) => void,
+  onSpawn?: (handle: { kill: () => void }) => void
 ): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(
@@ -66,9 +82,22 @@ function spawnClaude(
       {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env },
+        // Whitelist safe env vars — never expose full process.env (1.6)
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: process.env.HOME ?? "",
+          USER: process.env.USER ?? "",
+          SHELL: process.env.SHELL ?? "",
+          TERM: process.env.TERM ?? "",
+          LANG: process.env.LANG ?? "",
+          TMPDIR: process.env.TMPDIR ?? "",
+          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
+        },
       }
     );
+
+    // Expose the process handle so callers can kill it
+    if (onSpawn) onSpawn({ kill: () => { proc.kill("SIGTERM"); } });
 
     let text = "";
     let usage = { inputTokens: 0, outputTokens: 0 };
@@ -272,6 +301,9 @@ export async function runAgent(
     );
   }
 
+  // Read existing job to preserve userId set by webhook
+  const existingJob = await state.getJobById(jobId);
+
   // Upsert job state as working
   const jobState: JobState = {
     id: jobId,
@@ -283,6 +315,7 @@ export async function runAgent(
     triggerCommentId: job.commentId,
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    userId: existingJob?.userId,
   };
   await state.upsertJob(jobState);
 
@@ -307,9 +340,19 @@ export async function runAgent(
       fs.rmSync(repoPath, { recursive: true, force: true });
     }
 
+    // Use env-based auth to avoid leaking token in URLs / shell history (1.5)
+    const gitAuthHeader = `Authorization: basic ${Buffer.from(`x-access-token:${config.ghToken}`).toString("base64")}`;
+    const gitAuthEnv = {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+      GIT_CONFIG_VALUE_0: gitAuthHeader,
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+    };
+
     execSync(
-      `git clone --depth=50 https://x-access-token:${config.ghToken}@github.com/${job.owner}/${job.repo}.git`,
-      { cwd: jobDir, stdio: "pipe" }
+      `git clone --depth=50 https://github.com/${job.owner}/${job.repo}.git`,
+      { cwd: jobDir, stdio: "pipe", env: gitAuthEnv }
     );
 
     // Create branch
@@ -363,7 +406,12 @@ export async function runAgent(
           state.upsertJob(jobState).catch(() => {});
         }
       }
+    }, (handle) => {
+      activeProcesses.set(jobId, handle);
     });
+
+    // Process finished — remove from active map
+    activeProcesses.delete(jobId);
 
     jlog.info("Claude agent finished");
 
@@ -398,6 +446,9 @@ export async function runAgent(
         jlog.error("Failed to post timeout comment");
       }
 
+      // Cleanup work directory on timeout (1.7)
+      try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch {}
+
       return;
     }
 
@@ -406,12 +457,20 @@ export async function runAgent(
     jlog.info(`Agent result: ${result.type}`);
 
     if (result.type === "pr_ready") {
-      // Push branch
+      // Push branch using env-based auth (1.5)
       logLine({ ts: Date.now(), type: "status", content: "Pushing branch" });
       jlog.info(`Pushing branch ${branchName}`);
+      const pushAuthHeader = `Authorization: basic ${Buffer.from(`x-access-token:${config.ghToken}`).toString("base64")}`;
       execSync(`git push origin ${branchName}`, {
         cwd: repoPath,
         stdio: "pipe",
+        env: {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+          GIT_CONFIG_VALUE_0: pushAuthHeader,
+          PATH: process.env.PATH ?? "",
+          HOME: process.env.HOME ?? "",
+        },
       });
 
       // Create PR via REST API
@@ -510,6 +569,9 @@ export async function runAgent(
       jobState.updatedAt = new Date().toISOString();
       await state.upsertJob(jobState);
 
+      // Cleanup work directory on non-retryable failure (1.7)
+      try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch {}
+
       try {
         await postComment(
           job.owner,
@@ -523,6 +585,35 @@ export async function runAgent(
       }
     }
   } finally {
+    activeProcesses.delete(jobId);
     cleanup(jobId);
+
+    // Post-completion credit deduction (4.2)
+    try {
+      if (config.billingEnabled && jobState.userId && jobState.tokenUsage) {
+        const totalTokens = jobState.tokenUsage.inputTokens + jobState.tokenUsage.outputTokens;
+        const creditsUsed = Math.ceil(totalTokens / TOKENS_PER_CREDIT);
+        if (creditsUsed > 0) {
+          const deducted = await state.deductCredits(jobState.userId, creditsUsed);
+          if (deducted) {
+            const balance = await state.getCreditBalance(jobState.userId);
+            await state.recordCreditTransaction({
+              id: `deduct-${jobId}-${Date.now()}`,
+              userId: jobState.userId,
+              type: "deduction",
+              amount: -creditsUsed,
+              balanceAfter: balance?.credits ?? 0,
+              jobId,
+              tokensConsumed: totalTokens,
+              description: `Job ${jobId}: ${totalTokens.toLocaleString()} tokens`,
+              createdAt: new Date().toISOString(),
+            });
+            jlog.info(`Deducted ${creditsUsed} credits for ${totalTokens} tokens`);
+          }
+        }
+      }
+    } catch (err) {
+      jlog.error(`Credit deduction failed: ${(err as Error).message}`);
+    }
   }
 }

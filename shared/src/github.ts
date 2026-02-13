@@ -27,9 +27,15 @@ const DEFAULT_RETRY: RetryOptions = {
   maxDelayMs: 30000,
 };
 
-function isRetryable(status: number): boolean {
-  // Rate limit (403 with rate limit message), server errors, and 429
-  return status === 403 || status === 429 || status >= 500;
+function isRetryable(status: number, res?: Response): boolean {
+  // 429 = explicit rate limit, 5xx = server errors — always retry
+  if (status === 429 || status >= 500) return true;
+  // 403 is only retryable when it's a rate-limit 403 (x-ratelimit-remaining: 0)
+  // A permissions/scope 403 will never succeed on retry
+  if (status === 403 && res) {
+    return res.headers.get("x-ratelimit-remaining") === "0";
+  }
+  return false;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -77,7 +83,7 @@ async function fetchWithRetry(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const res = await fetch(url, init);
 
-    if (res.ok || !isRetryable(res.status) || attempt === maxRetries) {
+    if (res.ok || !isRetryable(res.status, res) || attempt === maxRetries) {
       return res;
     }
 
@@ -233,7 +239,11 @@ export async function acceptRepoInvitations(config: Config): Promise<void> {
     headers: headers(config),
   });
   if (!res.ok) {
-    log.error(`Failed to fetch repo invitations: ${res.status}`);
+    if (res.status === 403) {
+      log.warn("Cannot check repo invitations (token lacks permission for /user/repository_invitations — needs classic PAT with repo scope)");
+    } else {
+      log.error(`Failed to fetch repo invitations: ${res.status}`);
+    }
     return;
   }
   const invitations = (await res.json()) as { id: number; repository: { full_name: string } }[];

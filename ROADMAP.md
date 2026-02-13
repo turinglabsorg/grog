@@ -1,6 +1,6 @@
 # Grog Roadmap
 
-## Phase 1 — Webhook Agent (current)
+## Phase 1 — Webhook Agent
 
 - [x] Express server with GitHub webhook receiver
 - [x] HMAC signature verification
@@ -39,11 +39,37 @@
 - [x] Admin API (bulk status updates, stats, purge old jobs)
 - [x] Repo config CRUD API (`PUT/GET/DELETE /repos/:owner/:repo`)
 
-## Phase 4 — Polish & Scale
+## Phase 4 — Architecture & Self-service
 
-- [ ] Dashboard: repo config management UI (add/edit repos, toggle autoSolve)
-- [ ] Dashboard: admin stats panel (total tokens, jobs by repo)
+- [x] GitHub OAuth login (cookie-based sessions, signed HMAC tokens)
+- [x] Self-service repo setup via dashboard (invite bot + create webhook with unique per-repo secret)
+- [x] Multi-webhook-secret support (per-repo secrets for ownership identification, fallback to global secret)
+- [x] Dashboard: repo config management UI (add/edit repos, toggle autoSolve)
+- [x] Dashboard: admin stats panel (total tokens, jobs by repo)
+- [x] Dashboard: Setup tab with GitHub repo listing + one-click connect/disconnect
+- [x] Monorepo restructure: `skill/` + `shared/` + `web/` + `agent/`
+- [x] Separate web server (dashboard, API, webhook receiver) from agent worker
+- [x] MongoDB-backed job queue (agent polls and atomically claims jobs)
+- [x] Multiple agent workers can run in parallel
+
+## Phase 5 — SaaS Platform (future)
+
+Grog as a hosted service with tiered pricing:
+
+**Tiers:**
+- **Free (self-host):** User runs `web/` + `agent/` on their own machine, brings their own Claude subscription
+- **Shared (pay-per-use):** User registers via OAuth on hosted platform, pays per token consumed
+- **Dedicated (premium):** We spin up a dedicated VPS with a private agent worker
+
+**Infrastructure:**
+- [ ] Orchestrator webhook endpoint: inspects webhook secret → looks up user tier → routes to correct agent VPS
+- [ ] Per-token usage accounting (tracked by webhook secret ownership)
+- [ ] User dashboard on hosted platform (usage stats, billing, repo management)
+- [ ] Credit system / billing integration (Stripe or similar)
+- [ ] Dedicated agent VPS provisioning (API to spin up/down worker instances)
+- [ ] Admin panel for managing tenants and monitoring fleet
+
+**Polish:**
 - [ ] Webhook replay / manual trigger API
-- [ ] Multi-webhook-secret support (per-org secrets)
 - [ ] Job priority levels (urgent labels get processed first)
 - [ ] Slack/Discord notifications on job completion

@@ -2,6 +2,8 @@ node_modules/
 .env
 .claude/
 downloads/
+shared/dist/
+web/dist/
 agent/dist/
-agent/node_modules/
-agent/.env
+skill/dist/
+gh/

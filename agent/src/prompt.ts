@@ -1,4 +1,4 @@
-import type { Issue, Comment, Config } from "./types.js";
+import type { Issue, Comment, Config } from "@grog/shared";
 
 export function buildSolvePrompt(
   issue: Issue,

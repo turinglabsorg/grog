@@ -23,26 +23,14 @@ export class TokenBudget {
   }
 
   async getUsage(): Promise<{ hourly: number; daily: number }> {
-    const jobs = await this.state.listJobs();
     const now = Date.now();
-    const oneHourAgo = now - 60 * 60 * 1000;
-    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    const oneHourAgo = new Date(now - 60 * 60 * 1000).toISOString();
+    const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000).toISOString();
 
-    let hourly = 0;
-    let daily = 0;
-
-    for (const job of jobs) {
-      if (!job.tokenUsage) continue;
-      const total = job.tokenUsage.inputTokens + job.tokenUsage.outputTokens;
-      const jobTime = new Date(job.updatedAt).getTime();
-
-      if (jobTime >= oneDayAgo) {
-        daily += total;
-      }
-      if (jobTime >= oneHourAgo) {
-        hourly += total;
-      }
-    }
+    const [hourly, daily] = await Promise.all([
+      this.state.getTokenUsageSince(oneHourAgo),
+      this.state.getTokenUsageSince(oneDayAgo),
+    ]);
 
     return { hourly, daily };
   }
