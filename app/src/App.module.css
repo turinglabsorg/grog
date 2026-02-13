@@ -343,8 +343,15 @@
   gap: 16px;
 }
 
-@media (max-width: 640px) {
-  .modes {
+.modesThree {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 700px) {
+  .modes,
+  .modesThree {
     grid-template-columns: 1fr;
   }
 }
@@ -368,6 +375,19 @@
   color: #8b949e;
   line-height: 1.7;
   margin-bottom: 16px;
+}
+
+.comingSoonInline {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #58a6ff;
+  background: rgba(88, 166, 255, 0.1);
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 .modeStack {

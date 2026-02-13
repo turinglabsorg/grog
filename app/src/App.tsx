@@ -153,6 +153,45 @@ export function App() {
         </div>
       </section>
 
+      {/* Deployment modes */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Three Ways to Run</h2>
+        <p className={styles.sectionSub}>
+          From a local Claude Code plugin to a fully managed service &mdash; pick the setup that fits your workflow.
+        </p>
+
+        <div className={styles.modesThree}>
+          <div className={styles.mode}>
+            <div className={styles.modeTitle}>Claude Code Skill</div>
+            <div className={styles.modeDesc}>
+              Install the Grog skills directly into Claude Code. Solve issues, review PRs, and explore repos
+              from your terminal. No server, no infrastructure &mdash; just your local GitHub token.
+            </div>
+            <div className={styles.modeStack}>skill + Claude Code + GitHub PAT</div>
+          </div>
+          <div className={styles.mode}>
+            <div className={styles.modeTitle}>Self-Hosted Agent</div>
+            <div className={styles.modeDesc}>
+              Run the full autonomous agent on your own server. Create a GitHub App, connect it through
+              the built-in dashboard, and it picks up issues automatically.
+              Full control over your data, your repos, and your budget.
+            </div>
+            <div className={styles.modeStack}>agent + shared + MongoDB</div>
+          </div>
+          <div className={styles.mode}>
+            <div className={styles.modeTitle}>
+              Hosted SaaS <span className={styles.comingSoonInline}>coming soon</span>
+            </div>
+            <div className={styles.modeDesc}>
+              Sign in with GitHub, pick your repos, and buy credits. We handle the infrastructure,
+              scaling, and agent management. Pay only for what you use.
+              No server setup, no API keys to manage.
+            </div>
+            <div className={styles.modeStack}>app + api + agent + shared + MongoDB + Stripe</div>
+          </div>
+        </div>
+      </section>
+
       {/* CLI Skills */}
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>CLI Skills</h2>
@@ -245,32 +284,6 @@ export function App() {
         <div className={styles.skillNote}>
           All actions &mdash; comments, reviews, pushes &mdash; appear under your GitHub account.
           Your token stays on your machine. To update, <span className={styles.code}>git pull</span> and re-run the installer.
-        </div>
-      </section>
-
-      {/* Deployment modes */}
-      <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Two Ways to Run</h2>
-
-        <div className={styles.modes}>
-          <div className={styles.mode}>
-            <div className={styles.modeTitle}>Self-Hosted</div>
-            <div className={styles.modeDesc}>
-              Run the agent on your own server. Create a GitHub App, connect it through the built-in dashboard,
-              and you're live. No external dependencies beyond MongoDB and an Anthropic API key.
-              Full control over your data, your repos, and your budget.
-            </div>
-            <div className={styles.modeStack}>agent + shared + MongoDB</div>
-          </div>
-          <div className={styles.mode}>
-            <div className={styles.modeTitle}>Hosted SaaS</div>
-            <div className={styles.modeDesc}>
-              Sign in with GitHub, pick your repos, and buy credits. We handle the infrastructure,
-              scaling, and agent management. Pay only for what you use.
-              No server setup, no API keys to manage.
-            </div>
-            <div className={styles.modeStack}>app + api + agent + shared + MongoDB + Stripe</div>
-          </div>
         </div>
       </section>
 
