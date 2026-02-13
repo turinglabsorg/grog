@@ -171,7 +171,7 @@ export function App() {
             <div className={styles.modeTitle}>Hosted SaaS</div>
             <div className={styles.modeDesc}>
               Sign in with GitHub, pick your repos, and buy credits. We handle the infrastructure,
-              scaling, and agent management. Pay per token usage &mdash; 1 credit covers 10,000 tokens.
+              scaling, and agent management. Pay only for what you use.
               No server setup, no API keys to manage.
             </div>
             <div className={styles.modeStack}>app + api + agent + shared + MongoDB + Stripe</div>
