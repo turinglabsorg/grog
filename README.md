@@ -1,51 +1,170 @@
 # Grog
 
-> *"Arr matey, point me at the issue and I'll have a PR ready before the rum runs out!"*
+Grog is an autonomous GitHub issue solver. Point it at an issue, and it uses Claude to analyze code, implement fixes, and open pull requests — without human intervention.
 
-Grog is an autonomous GitHub issue solver. It watches your repos via webhooks, picks up issues, and uses Claude to analyze code, implement fixes, and open pull requests — all without human intervention.
+## How It Works
+
+```
+  @grog-agent[bot] solve this
+          |
+          v
+  GitHub Webhook ──> Agent (Express) ──> MongoDB ──> Claude ──> PR
+```
+
+1. Someone mentions the bot on a GitHub issue
+2. The webhook hits the agent server
+3. The agent clones the repo, spawns Claude, and works on the fix
+4. When done, it pushes a branch and opens a pull request
 
 ## Architecture
 
 ```
-GitHub Webhook  ──►  web/ (Express)  ──►  MongoDB  ──►  agent/ workers  ──►  PRs
+grog/
+  shared/   - Shared TypeScript library (types, state, GitHub API, auth)
+  agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
+  api/      - SaaS API server (OAuth, billing, Stripe)
+  app/      - SaaS frontend (React)
+  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review)
 ```
 
-| Component | What it does |
-|---|---|
-| **`skill/`** | Claude Code CLI skills — `/grog-solve`, `/grog-explore`, `/grog-review` |
-| **`shared/`** | Shared TypeScript library — types, config, state, GitHub API, budget |
-| **`web/`** | Express server — dashboard, REST API, webhook receiver, OAuth |
-| **`agent/`** | Worker process — polls MongoDB, runs Claude agents, pushes PRs |
+## Self-Host Setup
 
-The web server receives GitHub webhooks and writes jobs to MongoDB. Agent workers poll MongoDB and atomically claim jobs via `findOneAndUpdate`. Multiple workers can run in parallel.
+### Prerequisites
 
-## Self-host Quickstart
+- **Node.js** 20+
+- **MongoDB** running locally or a connection string
+- **Anthropic API key** (set as `ANTHROPIC_API_KEY` in your shell)
+- **Claude Code CLI** installed (`npm install -g @anthropic-ai/claude-code`)
+
+### Step 1: Create a GitHub App
+
+1. Go to [github.com/settings/apps/new](https://github.com/settings/apps/new)
+2. Fill in:
+   - **GitHub App name**: pick a name (e.g. `my-grog-agent`)
+   - **Homepage URL**: `http://localhost:3000`
+   - **Webhook URL**: your public URL + `/webhook` (or leave blank if polling only)
+   - **Webhook secret**: generate a random string and save it
+3. Set **Permissions**:
+   - Repository > **Contents**: Read and write
+   - Repository > **Issues**: Read and write
+   - Repository > **Pull requests**: Read and write
+   - Repository > **Metadata**: Read-only
+4. **Subscribe to events**:
+   - Issue comment
+   - Issues
+   - Pull request
+5. Click **Create GitHub App**
+6. Note the **App ID** shown at the top of the page
+7. Scroll down and click **Generate a private key** — save the `.pem` file
+
+### Step 2: Install the App
+
+1. Go to `https://github.com/settings/apps/<your-app-name>/installations`
+2. Click **Install**
+3. Select your organization or account
+4. Choose **All repositories** or select specific repos
+5. Click **Install**
+
+### Step 3: Install and Build
 
 ```bash
-# Install all workspaces
-npm install
-
-# Build everything
-npm run build
-
-# Start web server + agent worker (needs MongoDB running)
-npm run dev:web &
-npm run dev:agent
+git clone https://github.com/turinglabsorg/grog.git
+cd grog
+yarn install
+yarn build
 ```
 
-Both `web/` and `agent/` need the same `.env` — copy from the examples:
+### Step 4: Configure
 
 ```bash
-cp web/.env.example web/.env
 cp agent/.env.example agent/.env
-# Edit both with your GH_TOKEN, WEBHOOK_SECRET, MONGODB_URI
 ```
 
-Dashboard available at `http://localhost:3000/dashboard`.
+Edit `agent/.env`:
+
+```env
+# MongoDB connection
+MONGODB_URI=mongodb://localhost:27017/grog
+
+# Server port
+PORT=3000
+
+# Max parallel jobs (default: 2)
+MAX_CONCURRENT_JOBS=2
+
+# Working directory for cloned repos
+WORK_DIR=/tmp/grog-jobs
+
+# Agent timeout in minutes (default: 30)
+AGENT_TIMEOUT_MINUTES=30
+```
+
+You do **not** need `GH_TOKEN` or `WEBHOOK_SECRET` in the `.env` — these are configured through the dashboard.
+
+### Step 5: Start the Agent
+
+```bash
+yarn dev:agent
+```
+
+### Step 6: Connect via Dashboard
+
+1. Open [http://localhost:3000](http://localhost:3000)
+2. You'll see the **Connect GitHub App** setup screen
+3. Enter your **App ID** (from Step 1)
+4. Paste the contents of your **private key** `.pem` file
+5. Optionally enter your **webhook secret**
+6. Click **Connect**
+
+The dashboard will verify the connection and show the rate limit (should be 5,000/hr).
+
+### Step 7: Use It
+
+On any issue in a repo where the app is installed, comment:
+
+```
+@your-app-name[bot] solve this
+```
+
+The agent will pick it up, work on it, and open a PR.
+
+## Dashboard
+
+The agent includes a built-in terminal-style dashboard at `http://localhost:3000`:
+
+- **Job list** — all jobs with status, repo, issue, age, token usage
+- **Live terminal** — click any job to see real-time Claude output (SSE streaming)
+- **Stop/Start** — pause and resume jobs from the terminal panel
+- **Budget display** — token usage tracking in the header
+- **App status** — shows connected GitHub App with disconnect option
+
+## Production Deployment (PM2)
+
+```bash
+yarn build
+pm2 start pm2/ecosystem.config.cjs
+```
+
+For webhooks to work in production, your agent needs a public URL. Set the webhook URL in your GitHub App settings to point to `https://your-domain.com/webhook`.
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MONGODB_URI` | No | `mongodb://localhost:27017/grog` | MongoDB connection |
+| `PORT` | No | `3000` | Server port |
+| `MAX_CONCURRENT_JOBS` | No | `2` | Max parallel jobs |
+| `WORK_DIR` | No | `/tmp/grog-jobs` | Temp directory for repos |
+| `AGENT_TIMEOUT_MINUTES` | No | `30` | Max time per job |
+| `MAX_RETRIES` | No | `2` | Retries for transient failures |
+| `DAILY_TOKEN_BUDGET` | No | `0` (unlimited) | Daily token limit |
+| `HOURLY_TOKEN_BUDGET` | No | `0` (unlimited) | Hourly token limit |
+
+The GitHub App credentials (App ID, private key, installation ID) are stored in MongoDB and configured through the dashboard — no need to put them in `.env`.
 
 ## CLI Skills
 
-Install the Claude Code skills for local issue solving:
+Install Claude Code skills for local issue solving:
 
 ```bash
 cd skill && ./install.sh
@@ -53,69 +172,12 @@ cd skill && ./install.sh
 
 Then in any Claude Code session:
 
-```bash
+```
 /grog-solve https://github.com/owner/repo/issues/123
 /grog-explore https://github.com/owner/repo
 /grog-review https://github.com/owner/repo/pull/456
 ```
 
-## Production Deployment (PM2)
-
-```bash
-npm run build
-pm2 start ecosystem.config.cjs
-```
-
-This starts one web server instance and two agent workers.
-
-## Environment Variables
-
-### Web Server (`web/.env`)
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `GH_TOKEN` | Yes | — | GitHub token with `repo` scope |
-| `WEBHOOK_SECRET` | Yes | — | Global webhook secret |
-| `BOT_USERNAME` | No | `grog` | GitHub bot username |
-| `PORT` | No | `3000` | Server port |
-| `MONGODB_URI` | No | `mongodb://localhost:27017/grog` | MongoDB connection |
-| `DAILY_TOKEN_BUDGET` | No | `0` (unlimited) | Daily token limit |
-| `HOURLY_TOKEN_BUDGET` | No | `0` (unlimited) | Hourly token limit |
-| `GITHUB_CLIENT_ID` | No | — | OAuth app ID (enables login/setup) |
-| `GITHUB_CLIENT_SECRET` | No | — | OAuth app secret |
-| `SESSION_SECRET` | No | — | Cookie signing secret |
-| `BASE_URL` | No | `http://localhost:3000` | Public URL for OAuth callbacks |
-
-### Agent Worker (`agent/.env`)
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `GH_TOKEN` | Yes | — | GitHub token with `repo` scope |
-| `WEBHOOK_SECRET` | Yes | — | Global webhook secret |
-| `BOT_USERNAME` | No | `grog` | GitHub bot username |
-| `MAX_CONCURRENT_JOBS` | No | `2` | Max parallel jobs per worker |
-| `WORK_DIR` | No | `/tmp/grog-jobs` | Temp directory for cloned repos |
-| `MONGODB_URI` | No | `mongodb://localhost:27017/grog` | MongoDB connection |
-| `AGENT_TIMEOUT_MINUTES` | No | `30` | Max time per job |
-| `MAX_RETRIES` | No | `2` | Retry count for transient failures |
-
-## Dashboard
-
-The Kanban-style dashboard shows all jobs across columns: New, Worked, Waiting, Completed, Failed, Closed. Features:
-
-- Drag-and-drop cards between columns
-- Click cards to see live agent logs (SSE streaming)
-- Stop running workers from the log panel
-- Repo configuration management
-- Admin stats and bulk operations
-- GitHub OAuth login + one-click repo setup (when OAuth configured)
-
-Without OAuth configured, the dashboard works in read-only self-host mode — the Setup tab is hidden but everything else works.
-
 ## License
 
 ISC
-
----
-
-*Made with mass amounts of mass amounts of mass amounts of rum*

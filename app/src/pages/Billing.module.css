@@ -1,0 +1,148 @@
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+
+.heading {
+  font-size: 18px;
+  margin-bottom: 20px;
+}
+
+.balanceCard {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.balanceAmount {
+  font-size: 36px;
+  font-weight: 700;
+  color: #58a6ff;
+  font-family: monospace;
+}
+
+.balanceLabel {
+  font-size: 11px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.balanceSub {
+  font-size: 12px;
+  color: #484f58;
+  margin-top: 4px;
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: #8b949e;
+}
+
+.packsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.packCard {
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  color: inherit;
+}
+.packCard:hover {
+  border-color: #58a6ff;
+}
+
+.packCredits {
+  font-size: 28px;
+  font-weight: 700;
+  color: #c9d1d9;
+}
+
+.packPrice {
+  font-size: 16px;
+  color: #8b949e;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.packPer {
+  font-size: 11px;
+  color: #484f58;
+  margin-top: 2px;
+}
+
+.txTable {
+  width: 100%;
+  border-collapse: collapse;
+  background: #161b22;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #21262d;
+}
+
+.txTable th {
+  background: #0d1117;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  color: #484f58;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.txTable td {
+  padding: 10px 12px;
+  font-size: 12px;
+  border-top: 1px solid #21262d;
+}
+
+.txPositive {
+  color: #22c55e;
+  font-weight: 600;
+}
+
+.txNegative {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.empty {
+  color: #484f58;
+}
+
+.toastBox {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 200;
+}
+
+.toast {
+  background: #161b22;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.toastOk {
+  border-color: #22c55e;
+  color: #22c55e;
+}

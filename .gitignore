@@ -3,7 +3,8 @@ node_modules/
 .claude/
 downloads/
 shared/dist/
-web/dist/
+api/dist/
 agent/dist/
+app/dist/
 skill/dist/
 gh/

@@ -42,5 +42,7 @@ export function loadConfig(): Config {
     stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? "",
     stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
     billingEnabled: !!process.env.STRIPE_SECRET_KEY,
+    apiPort: parseInt(process.env.API_PORT ?? "3001", 10),
+    frontendUrl: process.env.FRONTEND_URL ?? "http://localhost:5173",
   };
 }

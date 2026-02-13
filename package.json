@@ -3,12 +3,14 @@
   "private": true,
   "workspaces": [
     "shared",
-    "web",
-    "agent"
+    "api",
+    "agent",
+    "app"
   ],
   "scripts": {
     "build": "yarn workspaces run build",
-    "dev:web": "yarn workspace @grog/web dev",
-    "dev:agent": "yarn workspace @grog/agent dev"
+    "dev:agent": "yarn workspace @grog/agent dev",
+    "dev:api": "yarn workspace @grog/api dev",
+    "dev:app": "yarn workspace @grog/app dev"
   }
 }

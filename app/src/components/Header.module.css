@@ -1,0 +1,75 @@
+.header {
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #21262d;
+}
+
+.logo {
+  color: #58a6ff;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-decoration: none;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid #30363d;
+}
+
+.login {
+  font-size: 13px;
+  color: #8b949e;
+  font-weight: 600;
+}
+
+.navLink {
+  color: #58a6ff;
+  font-size: 12px;
+  text-decoration: none;
+  font-weight: 600;
+}
+.navLink:hover {
+  text-decoration: underline;
+}
+
+.loginBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  font-family: inherit;
+}
+.loginBtn:hover {
+  background: #30363d;
+  text-decoration: none;
+}
+
+.logout {
+  background: none;
+  border: none;
+  color: #484f58;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+.logout:hover {
+  color: #c9d1d9;
+}

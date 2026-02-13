@@ -134,6 +134,8 @@ export interface Config {
   stripeSecretKey: string;
   stripeWebhookSecret: string;
   billingEnabled: boolean;
+  apiPort: number;
+  frontendUrl: string;
 }
 
 // --- Auth / Users ---

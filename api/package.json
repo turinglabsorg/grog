@@ -1,7 +1,7 @@
 {
-  "name": "@grog/web",
+  "name": "@grog/api",
   "version": "1.0.0",
-  "description": "Grog web server: dashboard, API, and webhook receiver",
+  "description": "Grog SaaS API server: OAuth, billing, Stripe",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -11,10 +11,12 @@
   },
   "dependencies": {
     "@grog/shared": "*",
+    "cors": "^2.8.5",
     "express": "^4.21.2",
     "stripe": "^17.0.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.12.0",
     "tsx": "^4.19.2",
