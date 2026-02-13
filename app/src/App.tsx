@@ -57,7 +57,7 @@ export function App() {
         </div>
       </div>
 
-      <footer className={styles.footer}>grog &mdash; powered by claude</footer>
+      <footer className={styles.footer}>grog &mdash; built by <a href="https://turinglabs.org" target="_blank" rel="noopener noreferrer">turinglabs</a></footer>
     </>
   );
 }
