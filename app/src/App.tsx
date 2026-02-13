@@ -191,20 +191,60 @@ export function App() {
           </div>
         </div>
 
-        <div className={styles.flowDiagram}>
-          <pre className={styles.pre}>{`  # Install the skills
-  cd grog/skill && ./install.sh
+        <h3 className={styles.installTitle}>Installation</h3>
 
-  # Then in any Claude Code session:
+        <div className={styles.installSteps}>
+          <div className={styles.installStep}>
+            <div className={styles.installNumber}>1</div>
+            <div className={styles.installContent}>
+              <div className={styles.installLabel}>Clone the repo</div>
+              <div className={styles.flowDiagram}>
+                <pre className={styles.pre}>{'  git clone https://github.com/turinglabsorg/grog.git'}</pre>
+              </div>
+            </div>
+          </div>
+          <div className={styles.installStep}>
+            <div className={styles.installNumber}>2</div>
+            <div className={styles.installContent}>
+              <div className={styles.installLabel}>Run the installer</div>
+              <div className={styles.flowDiagram}>
+                <pre className={styles.pre}>{'  cd grog/skill && ./install.sh'}</pre>
+              </div>
+              <div className={styles.installHint}>
+                Copies the grog tool to <span className={styles.code}>~/.claude/tools/grog/</span>,
+                installs dependencies, and creates the skill files in <span className={styles.code}>~/.claude/skills/</span>.
+              </div>
+            </div>
+          </div>
+          <div className={styles.installStep}>
+            <div className={styles.installNumber}>3</div>
+            <div className={styles.installContent}>
+              <div className={styles.installLabel}>Create a GitHub token</div>
+              <div className={styles.installHint}>
+                Go to <span className={styles.code}>github.com/settings/tokens</span> and generate a
+                Personal Access Token (classic) with <span className={styles.code}>repo</span> scope.
+                The installer will ask you to paste it.
+                Your token is stored locally in <span className={styles.code}>~/.claude/tools/grog/.env</span> and never leaves your machine.
+              </div>
+            </div>
+          </div>
+          <div className={styles.installStep}>
+            <div className={styles.installNumber}>4</div>
+            <div className={styles.installContent}>
+              <div className={styles.installLabel}>Use it</div>
+              <div className={styles.flowDiagram}>
+                <pre className={styles.pre}>{`  # Open any Claude Code session and type:
   /grog-solve https://github.com/owner/repo/issues/42
   /grog-review https://github.com/owner/repo/pull/15
   /grog-explore https://github.com/owner/repo`}</pre>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className={styles.skillNote}>
-          Skills authenticate with your local GitHub token (PAT).
-          All actions &mdash; comments, reviews, pushes &mdash; appear as your account.
-          Your token stays on your machine.
+          All actions &mdash; comments, reviews, pushes &mdash; appear under your GitHub account.
+          Your token stays on your machine. To update, <span className={styles.code}>git pull</span> and re-run the installer.
         </div>
       </section>
 
