@@ -15,17 +15,33 @@ Grog is an autonomous GitHub issue solver. Point it at an issue, and it uses Cla
 2. The webhook hits the agent server
 3. The agent clones the repo, spawns Claude, and works on the fix
 4. When done, it pushes a branch and opens a pull request
+5. If the agent needs clarification, it asks — and picks back up when you reply
 
 ## Architecture
 
 ```
 grog/
-  shared/   - Shared TypeScript library (types, state, GitHub API, auth)
+  shared/   - Shared TypeScript library (types, state, GitHub API, auth, billing)
   agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
   api/      - SaaS API server (OAuth, billing, Stripe)
   app/      - SaaS frontend (React)
   skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review, /grog-answer)
+  pm2/      - PM2 ecosystem config for production
 ```
+
+## Deployment Modes
+
+### 1. Self-Host (free)
+
+Run the agent on your own machine. You bring your own Anthropic API key and Claude Code CLI. No billing, no limits — just `yarn dev:agent` and go.
+
+### 2. SaaS with Credits
+
+Hosted by Turing Labs. Pay-per-token via credit packs (Stripe). 10,000 tokens = 1 credit. Credits are automatically deducted after each job completes.
+
+### 3. Dedicated (coming soon)
+
+Dedicated VPS per customer with managed infrastructure.
 
 ## Self-Host Setup
 
@@ -128,6 +144,10 @@ On any issue in a repo where the app is installed, comment:
 
 The agent will pick it up, work on it, and open a PR.
 
+## Follow-up Loop
+
+When the agent can't solve an issue on the first pass, it posts a comment asking for clarification and sets the job to `waiting_for_reply`. When you reply and mention the bot again, the agent re-runs with the full conversation — the new reply is highlighted so Claude knows exactly what changed.
+
 ## Dashboard
 
 The agent includes a built-in terminal-style dashboard at `http://localhost:3000`:
@@ -135,7 +155,7 @@ The agent includes a built-in terminal-style dashboard at `http://localhost:3000
 - **Job list** — all jobs with status, repo, issue, age, token usage
 - **Live terminal** — click any job to see real-time Claude output (SSE streaming)
 - **Stop/Start** — pause and resume jobs from the terminal panel
-- **Budget display** — token usage tracking in the header
+- **Budget display** — token usage tracking with hourly/daily limits in the header
 - **App status** — shows connected GitHub App with disconnect option
 
 ## Production Deployment (PM2)
@@ -159,6 +179,9 @@ For webhooks to work in production, your agent needs a public URL. Set the webho
 | `MAX_RETRIES` | No | `2` | Retries for transient failures |
 | `DAILY_TOKEN_BUDGET` | No | `0` (unlimited) | Daily token limit |
 | `HOURLY_TOKEN_BUDGET` | No | `0` (unlimited) | Hourly token limit |
+| `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, `error` |
+| `LOG_FORMAT` | No | human-readable | Set to `json` for structured output |
+| `STRIPE_SECRET_KEY` | No | — | Enable billing (SaaS mode) |
 
 The GitHub App credentials (App ID, private key, installation ID) are stored in MongoDB and configured through the dashboard — no need to put them in `.env`.
 
@@ -181,4 +204,4 @@ Then in any Claude Code session:
 
 ## License
 
-ISC
+MIT
