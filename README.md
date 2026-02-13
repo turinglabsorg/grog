@@ -24,7 +24,7 @@ grog/
   agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
   api/      - SaaS API server (OAuth, billing, Stripe)
   app/      - SaaS frontend (React)
-  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review)
+  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review, /grog-answer)
 ```
 
 ## Self-Host Setup
@@ -176,6 +176,7 @@ Then in any Claude Code session:
 /grog-solve https://github.com/owner/repo/issues/123
 /grog-explore https://github.com/owner/repo
 /grog-review https://github.com/owner/repo/pull/456
+/grog-answer https://github.com/owner/repo/issues/123
 ```
 
 ## License

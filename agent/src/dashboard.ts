@@ -107,7 +107,10 @@ export function renderDashboard(jobs: JobState[], configured = true): string {
   /* Terminal panel */
   .panel-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 99; opacity: 0; pointer-events: none; transition: opacity .15s; }
   .panel-overlay.open { opacity: 1; pointer-events: auto; }
-  .panel { position: fixed; top: 0; right: 0; width: 600px; max-width: 100vw; height: 100vh; background: #0d1117; border-left: 1px solid #21262d; z-index: 100; transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column; }
+  .panel { position: fixed; top: 0; right: 0; width: 600px; min-width: 320px; max-width: 100vw; height: 100vh; background: #0d1117; border-left: 1px solid #21262d; z-index: 100; transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column; }
+  .panel.resizing { transition: none; user-select: none; }
+  .panel-resize { position: absolute; top: 0; left: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 101; }
+  .panel-resize:hover, .panel-resize.active { background: #58a6ff; opacity: .4; }
   .panel.open { transform: translateX(0); }
   .panel-header { padding: 12px 16px; border-bottom: 1px solid #21262d; display: flex; justify-content: space-between; align-items: center; }
   .panel-header .panel-title { font-weight: 600; font-size: 13px; color: #c9d1d9; }
@@ -122,6 +125,7 @@ export function renderDashboard(jobs: JobState[], configured = true): string {
   .term-line.status { border-left-color: #22c55e; color: #22c55e; font-weight: 600; }
   .term-line.error { border-left-color: #f85149; color: #f85149; }
   .term-time { color: #484f58; font-size: 10px; margin-right: 6px; }
+  .term-id { color: #30363d; font-size: 10px; margin-right: 4px; font-family: inherit; }
 
   /* Panel footer with stop/start button */
   .panel-footer { padding: 12px 16px; border-top: 1px solid #21262d; text-align: center; }
@@ -177,6 +181,7 @@ export function renderDashboard(jobs: JobState[], configured = true): string {
 
 <div class="panel-overlay" id="overlay"></div>
 <div class="panel" id="panel">
+  <div class="panel-resize" id="panelResize"></div>
   <div class="panel-header">
     <div>
       <div class="panel-title" id="panelTitle"></div>
@@ -270,6 +275,7 @@ function updateStopBtn(status){
 
 function openPanel(jobId,title,status){
   if(activeES){activeES.close();activeES=null;}
+  seenIds={};
   activeJobId=jobId;
   activeJobStatus=status;
   document.getElementById("panelTitle").textContent=title;
@@ -297,11 +303,22 @@ function openPanel(jobId,title,status){
   }
 }
 
-function appendLine(line){
+var seenIds={};
+async function lineId(ts,content){
+  var raw=String(ts||"")+(content||"");
+  var buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(raw));
+  var a=new Uint8Array(buf),hex="";
+  for(var i=0;i<a.length;i++)hex+=a[i].toString(16).padStart(2,"0");
+  return hex.slice(0,6);
+}
+async function appendLine(line){
+  var id=await lineId(line.ts,line.content);
+  if(seenIds[id])return;
+  seenIds[id]=true;
   var d=document.createElement("div");
   d.className="term-line "+(line.type||"text");
   var ts=line.ts?'<span class="term-time">'+new Date(line.ts).toLocaleTimeString()+'</span> ':"";
-  d.innerHTML=ts+esc(line.content||"");
+  d.innerHTML='<span class="term-id">'+id+'</span> '+ts+esc(line.content||"");
   document.getElementById("terminal").appendChild(d);
   d.scrollIntoView({block:"end"});
 }
@@ -317,6 +334,32 @@ function closePanel(){
 document.getElementById("panelClose").addEventListener("click",closePanel);
 document.getElementById("overlay").addEventListener("click",closePanel);
 document.addEventListener("keydown",function(e){if(e.key==="Escape")closePanel();});
+
+// Panel horizontal resize
+(function(){
+  var handle=document.getElementById("panelResize");
+  var panel=document.getElementById("panel");
+  var dragging=false;
+  handle.addEventListener("mousedown",function(e){
+    e.preventDefault();
+    dragging=true;
+    handle.classList.add("active");
+    panel.classList.add("resizing");
+  });
+  document.addEventListener("mousemove",function(e){
+    if(!dragging)return;
+    var w=window.innerWidth-e.clientX;
+    if(w<320)w=320;
+    if(w>window.innerWidth)w=window.innerWidth;
+    panel.style.width=w+"px";
+  });
+  document.addEventListener("mouseup",function(){
+    if(!dragging)return;
+    dragging=false;
+    handle.classList.remove("active");
+    panel.classList.remove("resizing");
+  });
+})();
 
 document.getElementById("jobList").addEventListener("click",function(e){
   if(e.target.closest("a"))return;

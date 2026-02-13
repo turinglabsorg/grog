@@ -4,14 +4,21 @@ export function buildSolvePrompt(
   issue: Issue,
   comments: Comment[],
   repoPath: string,
-  config: Config
+  config: Config,
+  triggerCommentId?: number
 ): string {
   const commentBlock = comments
-    .map(
-      (c) =>
-        `--- @${c.user.login} (${c.created_at}) ---\n${c.body}`
-    )
+    .map((c) => {
+      const marker =
+        c.id === triggerCommentId
+          ? " ⬅ NEW (this reply triggered the current run)"
+          : "";
+      return `--- @${c.user.login} (${c.created_at})${marker} ---\n${c.body}`;
+    })
     .join("\n\n");
+
+  const isFollowUp =
+    triggerCommentId && comments.some((c) => c.id === triggerCommentId);
 
   const labelsStr =
     issue.labels.length > 0
@@ -32,7 +39,7 @@ ${issue.body ?? "(no description)"}
 
 ${comments.length > 0 ? `### Comments\n\n${commentBlock}` : ""}
 
-## Your Task
+${isFollowUp ? `## Follow-up Context\n\nYou previously worked on this issue and asked for clarification. A new reply has arrived (marked with ⬅ NEW above). Read the entire conversation to understand the full context, then focus on addressing the latest reply.\n` : ""}## Your Task
 
 You are working in a cloned repository at: ${repoPath}
 The branch \`grog/issue-${issue.number}\` has been created for you.
@@ -45,17 +52,22 @@ The branch \`grog/issue-${issue.number}\` has been created for you.
 
 ## Output Format
 
-When you are done, output EXACTLY ONE of the following on its own line:
+When you are done, output EXACTLY ONE of the following as a fenced JSON block:
 
 If you successfully implemented the solution:
-\`\`\`
-RESULT: PR_READY
+\`\`\`json
+{
+  "result": "PR_READY",
+  "summary": "Markdown summary of all changes made (use bullet points, bold headers, etc.)"
+}
 \`\`\`
 
 If you need more information or the issue is ambiguous:
-\`\`\`
-RESULT: NEEDS_CLARIFICATION
-<your questions here, one per line>
+\`\`\`json
+{
+  "result": "NEEDS_CLARIFICATION",
+  "questions": ["Question 1", "Question 2"]
+}
 \`\`\`
 
 ## Rules

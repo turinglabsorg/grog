@@ -75,6 +75,7 @@ export interface JobState {
   retryCount?: number;
   failureReason?: string;
   userId?: number;
+  summary?: string;
 }
 
 // --- Agent Result ---
@@ -84,6 +85,7 @@ export type AgentResultType = "pr_ready" | "needs_clarification" | "failed";
 export interface AgentResult {
   type: AgentResultType;
   message: string;
+  summary?: string;
   branch?: string;
 }
 

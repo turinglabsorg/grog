@@ -36,6 +36,7 @@ mkdir -p "$TOOLS_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
 mkdir -p "$SKILLS_DIR/grog-explore"
 mkdir -p "$SKILLS_DIR/grog-review"
+mkdir -p "$SKILLS_DIR/grog-answer"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo "  > $TOOLS_DIR"
@@ -244,7 +245,56 @@ Be constructive and specific. Reference line numbers and file paths. Suggest con
 - If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
 EOF
 
-echo -e "  ${GREEN}✓${NC} Created /grog-review skill"
+echo "  > /grog-review skill"
+
+# Skill 4: /grog-answer - Post a summary comment to a GitHub issue
+cat > "$SKILLS_DIR/grog-answer/SKILL.md" << 'EOF'
+---
+name: grog-answer
+description: Post a summary comment to a GitHub issue. Use when the user wants to post their work summary or a comment to an issue.
+allowed-tools: Bash, Read, Write
+argument-hint: <github-issue-url>
+---
+
+# GROG Answer - Post Summary to GitHub Issue
+
+Post a summary of what was done as a comment on a GitHub issue.
+
+## Usage
+
+When the user wants to post a summary or comment to a GitHub issue:
+
+1. Gather the summary of what was done. Sources:
+   - Your own context from recent work (commits, code changes, conversation)
+   - Ask the user if you're not sure what to include
+2. Write the markdown summary to a temp file:
+   ```bash
+   # Write to a unique temp file
+   SUMMARY_FILE="/tmp/grog-answer-$(date +%s).md"
+   ```
+   Use the Write tool to create the file with the markdown content.
+3. Post it:
+   ```bash
+   node ~/.claude/tools/grog/index.js answer $ARGUMENTS "$SUMMARY_FILE"
+   ```
+4. Report what was posted (include the comment URL from the output)
+
+## Summary Format
+
+Write a clear markdown summary with:
+- What was changed (bullet points)
+- Why (link back to the issue context)
+- Any notes for reviewers
+
+Keep it concise but informative.
+
+## Error Handling
+
+- If no URL is provided, ask the user for the GitHub issue URL
+- If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
+EOF
+
+echo "  > /grog-answer skill"
 
 echo ""
 echo "┌──────────────────────────────────────────────────────────┐"
@@ -256,12 +306,14 @@ echo ""
 echo "    /grog-solve <issue-url>     fetch and solve a single issue"
 echo "    /grog-explore <repo-url>    list all issues for batch processing"
 echo "    /grog-review <pr-url>       review a pull request"
+echo "    /grog-answer <issue-url>    post a summary comment to an issue"
 echo ""
 echo "  examples:"
 echo "    /grog-solve https://github.com/owner/repo/issues/123"
 echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
 echo "    /grog-explore https://github.com/owner/repo"
 echo "    /grog-review https://github.com/owner/repo/pull/123"
+echo "    /grog-answer https://github.com/owner/repo/issues/123"
 echo ""
 echo "  files:"
 echo "    tool:   $TOOLS_DIR"

@@ -1073,6 +1073,68 @@ async function handleExplore(url) {
 }
 
 /**
+ * Handle 'answer' command - post a summary comment to a GitHub issue
+ */
+async function handleAnswer(issueUrl, summaryFilePath) {
+  const parsed = parseGitHubIssueUrl(issueUrl);
+  if (!parsed) {
+    console.error("! error: invalid GitHub issue URL");
+    console.error("  expected: https://github.com/owner/repo/issues/123");
+    process.exit(1);
+  }
+
+  if (!summaryFilePath) {
+    console.error("! error: missing summary file path");
+    console.error("  usage: grog answer <issue-url> <path-to-summary-file>");
+    process.exit(1);
+  }
+
+  let summary;
+  try {
+    const { readFileSync } = await import("fs");
+    summary = readFileSync(summaryFilePath, "utf-8").trim();
+  } catch (err) {
+    console.error(`! error: could not read summary file: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (!summary) {
+    console.error("! error: summary file is empty");
+    process.exit(1);
+  }
+
+  try {
+    console.log(
+      `> posting comment to ${parsed.owner}/${parsed.repo}#${parsed.issueNumber}...`,
+    );
+
+    const url = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${parsed.issueNumber}/comments`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${GH_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body: summary }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API error: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const comment = await response.json();
+    console.log(`> comment posted: ${comment.html_url}`);
+  } catch (error) {
+    console.error("! error:", error.message);
+    process.exit(1);
+  }
+}
+
+/**
  * Main function
  */
 async function main() {
@@ -1087,12 +1149,14 @@ async function main() {
     console.log("    grog solve <issue-url>       fetch and solve a single issue");
     console.log("    grog explore <project-url>   list all issues for batch processing");
     console.log("    grog review <pr-url>         fetch PR details for code review");
+    console.log("    grog answer <issue-url> <file>  post a summary comment to an issue");
     console.log("");
     console.log("  examples:");
     console.log("    grog solve https://github.com/owner/repo/issues/123");
     console.log("    grog explore https://github.com/owner/repo");
     console.log("    grog explore https://github.com/orgs/myorg/projects/1");
     console.log("    grog review https://github.com/owner/repo/pull/123");
+    console.log("    grog answer https://github.com/owner/repo/issues/123 /tmp/summary.md");
     console.log("");
     process.exit(1);
   }
@@ -1125,6 +1189,17 @@ async function main() {
       await handleReview(url);
       break;
 
+    case "answer": {
+      const summaryFile = process.argv[4];
+      if (!url) {
+        console.error("! error: missing issue URL");
+        console.log("  usage: grog answer <github-issue-url> <path-to-summary-file>");
+        process.exit(1);
+      }
+      await handleAnswer(url, summaryFile);
+      break;
+    }
+
     default:
       // Backwards compatibility: if the argument looks like a URL, auto-detect command
       if (command.includes("github.com") && command.includes("/issues/")) {
@@ -1135,7 +1210,7 @@ async function main() {
         await handleExplore(command);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review");
+        console.log("  available: solve, explore, review, answer");
         process.exit(1);
       }
   }

@@ -228,6 +228,15 @@ export function App() {
               Works with both single repos and multi-repo GitHub Projects.
             </div>
           </div>
+          <div className={styles.skill}>
+            <div className={styles.skillCmd}>/grog-answer</div>
+            <div className={styles.skillArg}>{'<issue-url>'}</div>
+            <div className={styles.skillDesc}>
+              Posts a summary comment to a GitHub issue.
+              Gathers context from your recent work, writes a markdown summary, and posts it directly on the issue.
+              Use after solving or reviewing to share what was done.
+            </div>
+          </div>
         </div>
 
         <h3 className={styles.installTitle}>Installation</h3>
@@ -275,7 +284,8 @@ export function App() {
                 <pre className={styles.pre}>{`  # Open any Claude Code session and type:
   /grog-solve https://github.com/owner/repo/issues/42
   /grog-review https://github.com/owner/repo/pull/15
-  /grog-explore https://github.com/owner/repo`}</pre>
+  /grog-explore https://github.com/owner/repo
+  /grog-answer https://github.com/owner/repo/issues/42`}</pre>
               </div>
             </div>
           </div>

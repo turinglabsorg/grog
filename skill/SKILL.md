@@ -1,6 +1,6 @@
 # Grog — Claude Code Skills
 
-Grog adds three slash commands to Claude Code for working with GitHub issues and pull requests directly from your terminal.
+Grog adds four slash commands to Claude Code for working with GitHub issues and pull requests directly from your terminal.
 
 ## Skills
 
@@ -15,6 +15,10 @@ Fetches a pull request with the full diff, inline comments, and review history. 
 ### `/grog-explore <repo-or-project-url>`
 
 Lists all open issues from a repository or GitHub Project, grouped by labels or status columns. Lets you pick issues and batch-process them one by one.
+
+### `/grog-answer <issue-url>`
+
+Posts a summary comment to a GitHub issue. Gathers context from your recent work, writes a markdown summary, and posts it directly on the issue. Use after solving or reviewing to share what was done.
 
 ## Installation
 
@@ -35,7 +39,7 @@ The installer will:
 - Copy the grog tool to `~/.claude/tools/grog/`
 - Install npm dependencies
 - Ask for your GitHub Personal Access Token
-- Create the three skill files in `~/.claude/skills/`
+- Create the four skill files in `~/.claude/skills/`
 
 ### 3. Create a GitHub token
 
@@ -58,6 +62,7 @@ Open any Claude Code session and type:
 /grog-solve https://github.com/owner/repo/issues/123
 /grog-review https://github.com/owner/repo/pull/456
 /grog-explore https://github.com/owner/repo
+/grog-answer https://github.com/owner/repo/issues/123
 ```
 
 ## How it works
@@ -77,6 +82,7 @@ Since it runs inside Claude Code, it has full access to your local filesystem, g
 ~/.claude/skills/grog-solve/   # Skill definitions (created by installer)
 ~/.claude/skills/grog-explore/
 ~/.claude/skills/grog-review/
+~/.claude/skills/grog-answer/
 ```
 
 ## Updating
