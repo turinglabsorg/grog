@@ -153,6 +153,61 @@ export function App() {
         </div>
       </section>
 
+      {/* CLI Skills */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>CLI Skills</h2>
+        <p className={styles.sectionSub}>
+          Use Grog directly from your terminal inside any Claude Code session.
+          No server needed &mdash; runs locally with your GitHub account.
+        </p>
+
+        <div className={styles.skills}>
+          <div className={styles.skill}>
+            <div className={styles.skillCmd}>/grog-solve</div>
+            <div className={styles.skillArg}>{'<issue-url>'}</div>
+            <div className={styles.skillDesc}>
+              Fetches a GitHub issue, analyzes the codebase, implements the fix, and commits the changes.
+              Handles image attachments, multi-file edits, and complex refactors.
+              When done, it can post a summary of the changes back to the issue as a comment.
+            </div>
+          </div>
+          <div className={styles.skill}>
+            <div className={styles.skillCmd}>/grog-review</div>
+            <div className={styles.skillArg}>{'<pr-url>'}</div>
+            <div className={styles.skillDesc}>
+              Fetches a pull request with full diff, inline comments, and review history.
+              Performs a thorough code review checking for correctness, security, performance, and style.
+              Can post the review directly on the PR with approve, request changes, or comment.
+            </div>
+          </div>
+          <div className={styles.skill}>
+            <div className={styles.skillCmd}>/grog-explore</div>
+            <div className={styles.skillArg}>{'<repo-or-project-url>'}</div>
+            <div className={styles.skillDesc}>
+              Lists all open issues from a repository or GitHub Project, grouped by labels or status.
+              Pick which issues to tackle and batch-process them one by one.
+              Works with both single repos and multi-repo GitHub Projects.
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.flowDiagram}>
+          <pre className={styles.pre}>{`  # Install the skills
+  cd grog/skill && ./install.sh
+
+  # Then in any Claude Code session:
+  /grog-solve https://github.com/owner/repo/issues/42
+  /grog-review https://github.com/owner/repo/pull/15
+  /grog-explore https://github.com/owner/repo`}</pre>
+        </div>
+
+        <div className={styles.skillNote}>
+          Skills authenticate with your local GitHub token (PAT).
+          All actions &mdash; comments, reviews, pushes &mdash; appear as your account.
+          Your token stays on your machine.
+        </div>
+      </section>
+
       {/* Deployment modes */}
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>Two Ways to Run</h2>
