@@ -21,6 +21,7 @@ export function App() {
     <>
       <Header user={user} />
       <div className={styles.hero}>
+        <img src="/logo.png" alt="Grog" className={styles.mascot} />
         <div className={styles.title}>GROG</div>
         <div className={styles.sub}>
           Autonomous coding agent that solves GitHub issues.

@@ -6,12 +6,26 @@
   border-bottom: 1px solid #21262d;
 }
 
-.logo {
+.logoLink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.logoImg {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid #58a6ff;
+  object-fit: cover;
+}
+
+.logoText {
   color: #58a6ff;
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 3px;
-  text-decoration: none;
 }
 
 .right {

@@ -9,7 +9,10 @@ interface Props {
 export function Header({ user }: Props) {
   return (
     <header className={styles.header}>
-      <Link to="/" className={styles.logo}>GROG</Link>
+      <Link to="/" className={styles.logoLink}>
+        <img src="/logo.png" alt="Grog" className={styles.logoImg} />
+        <span className={styles.logoText}>GROG</span>
+      </Link>
       <div className={styles.right}>
         {user ? (
           <>

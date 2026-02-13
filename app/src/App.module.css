@@ -9,6 +9,16 @@
   min-height: calc(100vh - 100px);
 }
 
+.mascot {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  border: 3px solid #58a6ff;
+  box-shadow: 0 0 40px rgba(88, 166, 255, 0.3), 0 0 80px rgba(88, 166, 255, 0.1);
+  margin-bottom: 24px;
+  object-fit: cover;
+}
+
 .title {
   font-size: 48px;
   font-weight: 700;
