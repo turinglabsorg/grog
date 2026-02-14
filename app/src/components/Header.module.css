@@ -3,7 +3,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border);
+  background: rgba(7, 8, 13, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 .logoLink {
@@ -17,12 +23,16 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 2px solid #58a6ff;
+  border: 2px solid var(--purple);
   object-fit: cover;
 }
 
 .logoText {
-  color: #58a6ff;
+  font-family: var(--font-display);
+  background: linear-gradient(135deg, var(--cyan), var(--purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 3px;
@@ -38,17 +48,17 @@
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  border: 2px solid #30363d;
+  border: 2px solid var(--border-accent);
 }
 
 .login {
   font-size: 13px;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-weight: 600;
 }
 
 .navLink {
-  color: #58a6ff;
+  color: var(--cyan);
   font-size: 12px;
   text-decoration: none;
   font-weight: 600;
@@ -61,26 +71,27 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #21262d;
-  color: #8b949e;
-  border: 1px solid #30363d;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 16px;
   font-size: 13px;
   font-weight: 600;
   text-decoration: none;
-  font-family: inherit;
+  font-family: var(--font-mono);
   cursor: default;
   position: relative;
+  transition: border-color 0.3s;
 }
 
 .comingSoon {
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #58a6ff;
-  background: rgba(88, 166, 255, 0.1);
-  border: 1px solid rgba(88, 166, 255, 0.2);
+  color: var(--cyan);
+  background: var(--cyan-glow);
+  border: 1px solid rgba(34, 211, 238, 0.2);
   border-radius: 3px;
   padding: 1px 5px;
   margin-left: 2px;
@@ -89,11 +100,12 @@
 .logout {
   background: none;
   border: none;
-  color: #484f58;
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 11px;
-  font-family: inherit;
+  font-family: var(--font-mono);
+  transition: color 0.2s;
 }
 .logout:hover {
-  color: #c9d1d9;
+  color: var(--text-primary);
 }

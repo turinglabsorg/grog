@@ -2,6 +2,8 @@ import { Link } from "react-router-dom";
 import type { UserInfo } from "../api";
 import styles from "./Header.module.css";
 
+const base = import.meta.env.BASE_URL;
+
 interface Props {
   user?: UserInfo | null;
 }
@@ -10,7 +12,7 @@ export function Header({ user }: Props) {
   return (
     <header className={styles.header}>
       <Link to="/" className={styles.logoLink}>
-        <img src="/logo.png" alt="Grog" className={styles.logoImg} />
+        <img src={`${base}logo.png`} alt="Grog" className={styles.logoImg} />
         <span className={styles.logoText}>GROG</span>
       </Link>
       <div className={styles.right}>
