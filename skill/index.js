@@ -3,7 +3,7 @@
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { writeFileSync, mkdirSync, existsSync, renameSync } from "fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync } from "fs";
 
 // Load .env from the package directory
 const __filename = fileURLToPath(import.meta.url);
@@ -12,7 +12,14 @@ config({ path: join(__dirname, ".env") });
 
 const GH_TOKEN = process.env.GH_TOKEN;
 
-if (!GH_TOKEN) {
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_STATE_FILE = "/tmp/grog-telegram-state.json";
+
+if (
+  !GH_TOKEN &&
+  !["talk", "telegram-send", "telegram-recv", undefined].includes(process.argv[2])
+) {
   console.error("! error: GH_TOKEN not found in .env file");
   process.exit(1);
 }
@@ -1134,6 +1141,182 @@ async function handleAnswer(issueUrl, summaryFilePath) {
   }
 }
 
+// ─────────────────────────────────────────────────────────
+// Telegram Bridge
+// ─────────────────────────────────────────────────────────
+
+async function telegramApi(method, params = {}) {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error("! error: TELEGRAM_BOT_TOKEN not set in .env");
+    console.error("  create a bot at https://t.me/BotFather and add the token");
+    process.exit(1);
+  }
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error(`Telegram API error: ${data.description}`);
+  }
+  return data.result;
+}
+
+function loadTelegramState() {
+  try {
+    return JSON.parse(readFileSync(TELEGRAM_STATE_FILE, "utf-8"));
+  } catch {
+    return { offset: 0, chatId: null };
+  }
+}
+
+function saveTelegramState(state) {
+  writeFileSync(TELEGRAM_STATE_FILE, JSON.stringify(state));
+}
+
+/**
+ * Initialize Telegram bridge — connect to bot, discover chat, send welcome
+ */
+async function handleTalk() {
+  const me = await telegramApi("getMe");
+  let chatId = TELEGRAM_CHAT_ID;
+  let offset = 0;
+
+  if (!chatId) {
+    // Auto-discover: flush pending updates, then wait for a message
+    console.log(`> bot: @${me.username}`);
+    console.log(
+      "> no chat ID configured — send any message to the bot on Telegram to connect.",
+    );
+    console.log("> waiting...");
+
+    // Flush old updates
+    const flush = await telegramApi("getUpdates", { timeout: 0 });
+    if (flush.length > 0) {
+      offset = Math.max(...flush.map((u) => u.update_id)) + 1;
+    }
+
+    // Wait for a fresh message
+    const updates = await telegramApi("getUpdates", {
+      offset,
+      timeout: 60,
+    });
+    const msg = updates.find((u) => u.message)?.message;
+    if (!msg) {
+      console.error(
+        "! timeout — no message received. try again after messaging the bot.",
+      );
+      process.exit(1);
+    }
+
+    chatId = String(msg.chat.id);
+    offset = Math.max(...updates.map((u) => u.update_id)) + 1;
+    console.log(
+      `> connected to: ${msg.chat.first_name || msg.chat.title || chatId}`,
+    );
+  } else {
+    // Flush pending updates so we start fresh
+    const flush = await telegramApi("getUpdates", { timeout: 0 });
+    if (flush.length > 0) {
+      offset = Math.max(...flush.map((u) => u.update_id)) + 1;
+      await telegramApi("getUpdates", { offset, timeout: 0 });
+    }
+  }
+
+  saveTelegramState({ offset, chatId });
+
+  // Send welcome message
+  await telegramApi("sendMessage", {
+    chat_id: chatId,
+    text: "Grog is online.\n\nSend messages here — they will be processed by Claude Code.\n\nSend \"bye\" to disconnect.",
+  });
+
+  console.log("> grog talk is active");
+  console.log(`> bot: @${me.username}`);
+  console.log(`> chat: ${chatId}`);
+}
+
+/**
+ * Send a message to Telegram — accepts a file path or direct text
+ */
+async function handleTelegramSend(args) {
+  const state = loadTelegramState();
+  const chatId = state.chatId || TELEGRAM_CHAT_ID;
+
+  if (!chatId) {
+    console.error('! error: no chat ID — run "grog talk" first');
+    process.exit(1);
+  }
+
+  let message;
+  if (args.length === 1 && existsSync(args[0])) {
+    message = readFileSync(args[0], "utf-8").trim();
+  } else {
+    message = args.join(" ");
+  }
+
+  if (!message) {
+    console.error("! error: empty message");
+    process.exit(1);
+  }
+
+  // Telegram limit is 4096 chars — split if needed
+  const chunks = [];
+  for (let i = 0; i < message.length; i += 4000) {
+    chunks.push(message.substring(i, i + 4000));
+  }
+
+  for (const chunk of chunks) {
+    await telegramApi("sendMessage", { chat_id: chatId, text: chunk });
+  }
+
+  console.log("> sent to Telegram");
+}
+
+/**
+ * Wait for a message from Telegram — long-polls for ~90 seconds
+ */
+async function handleTelegramRecv() {
+  const state = loadTelegramState();
+  const chatId = state.chatId || TELEGRAM_CHAT_ID;
+
+  if (!chatId) {
+    console.error('! error: no chat ID — run "grog talk" first');
+    process.exit(1);
+  }
+
+  // Poll with retry — up to ~90 seconds before returning [no message]
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const params = { timeout: 45, allowed_updates: ["message"] };
+    if (state.offset) params.offset = state.offset;
+
+    const updates = await telegramApi("getUpdates", params);
+
+    // Filter for our chat only
+    const messages = updates.filter(
+      (u) => u.message && String(u.message.chat.id) === String(chatId),
+    );
+
+    // Advance offset for ALL updates (including other chats)
+    if (updates.length > 0) {
+      state.offset = Math.max(...updates.map((u) => u.update_id)) + 1;
+      saveTelegramState(state);
+    }
+
+    if (messages.length > 0) {
+      const texts = messages
+        .map((u) => u.message.text || "[non-text message]")
+        .join("\n");
+      console.log(texts);
+      return;
+    }
+  }
+
+  console.log("[no message]");
+}
+
 /**
  * Main function
  */
@@ -1150,6 +1333,7 @@ async function main() {
     console.log("    grog explore <project-url>   list all issues for batch processing");
     console.log("    grog review <pr-url>         fetch PR details for code review");
     console.log("    grog answer <issue-url> <file>  post a summary comment to an issue");
+    console.log("    grog talk                       connect to Telegram for remote interaction");
     console.log("");
     console.log("  examples:");
     console.log("    grog solve https://github.com/owner/repo/issues/123");
@@ -1157,6 +1341,7 @@ async function main() {
     console.log("    grog explore https://github.com/orgs/myorg/projects/1");
     console.log("    grog review https://github.com/owner/repo/pull/123");
     console.log("    grog answer https://github.com/owner/repo/issues/123 /tmp/summary.md");
+    console.log("    grog talk");
     console.log("");
     process.exit(1);
   }
@@ -1199,6 +1384,25 @@ async function main() {
       await handleAnswer(url, summaryFile);
       break;
     }
+
+    case "talk":
+      await handleTalk();
+      break;
+
+    case "telegram-send": {
+      const sendArgs = process.argv.slice(3);
+      if (sendArgs.length === 0) {
+        console.error("! error: missing message or file path");
+        console.log("  usage: grog telegram-send <message-or-file-path>");
+        process.exit(1);
+      }
+      await handleTelegramSend(sendArgs);
+      break;
+    }
+
+    case "telegram-recv":
+      await handleTelegramRecv();
+      break;
 
     default:
       // Backwards compatibility: if the argument looks like a URL, auto-detect command

@@ -1,6 +1,6 @@
 # Grog — Claude Code Skills
 
-Grog adds four slash commands to Claude Code for working with GitHub issues and pull requests directly from your terminal.
+Grog adds five slash commands to Claude Code for working with GitHub issues, pull requests, and remote interaction directly from your terminal.
 
 ## Skills
 
@@ -19,6 +19,10 @@ Lists all open issues from a repository or GitHub Project, grouped by labels or 
 ### `/grog-answer <issue-url>`
 
 Posts a summary comment to a GitHub issue. Gathers context from your recent work, writes a markdown summary, and posts it directly on the issue. Use after solving or reviewing to share what was done.
+
+### `/grog-talk`
+
+Opens a bidirectional Telegram bridge. Connect a Telegram bot to your Claude Code session, then walk away from the terminal and keep interacting from your phone. Messages you send on Telegram are processed as if you typed them in the terminal. Responses are sent back to Telegram as concise summaries.
 
 ## Installation
 
@@ -39,7 +43,8 @@ The installer will:
 - Copy the grog tool to `~/.claude/tools/grog/`
 - Install npm dependencies
 - Ask for your GitHub Personal Access Token
-- Create the four skill files in `~/.claude/skills/`
+- Optionally configure a Telegram bot for remote interaction
+- Create the five skill files in `~/.claude/skills/`
 
 ### 3. Create a GitHub token
 
@@ -63,6 +68,7 @@ Open any Claude Code session and type:
 /grog-review https://github.com/owner/repo/pull/456
 /grog-explore https://github.com/owner/repo
 /grog-answer https://github.com/owner/repo/issues/123
+/grog-talk
 ```
 
 ## How it works
@@ -77,12 +83,13 @@ Since it runs inside Claude Code, it has full access to your local filesystem, g
 ~/.claude/tools/grog/          # The grog CLI tool
   index.js                     # Main script
   package.json                 # Dependencies
-  .env                         # Your GitHub token (GH_TOKEN=ghp_...)
+  .env                         # Your tokens (GH_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
 
 ~/.claude/skills/grog-solve/   # Skill definitions (created by installer)
 ~/.claude/skills/grog-explore/
 ~/.claude/skills/grog-review/
 ~/.claude/skills/grog-answer/
+~/.claude/skills/grog-talk/
 ```
 
 ## Updating
@@ -95,4 +102,21 @@ git pull
 ./install.sh
 ```
 
-Your token will be preserved — the installer asks before overwriting it.
+Your tokens will be preserved — the installer asks before overwriting them.
+
+## Telegram Setup (optional)
+
+To use `/grog-talk`, you need a Telegram bot:
+
+1. Open Telegram and message [@BotFather](https://t.me/BotFather)
+2. Send `/newbot` and follow the prompts to create a bot
+3. Copy the bot token
+4. Run the installer — it will ask for the token during setup
+5. The chat ID is auto-detected when you first run `/grog-talk` and message the bot
+
+Alternatively, add these to `~/.claude/tools/grog/.env` manually:
+
+```
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+TELEGRAM_CHAT_ID=your-chat-id
+```

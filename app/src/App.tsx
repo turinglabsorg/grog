@@ -264,6 +264,15 @@ export function App() {
                 Posts a summary comment to a GitHub issue with context from your recent work.
               </div>
             </div>
+            <div className={styles.skillRow}>
+              <div className={styles.skillCmdLine}>
+                <span className={styles.skillPrompt}>$</span>
+                <span className={styles.skillCmd}>/grog-talk</span>
+              </div>
+              <div className={styles.skillDesc}>
+                Opens a Telegram bridge. Walk away from the terminal and keep interacting with Claude Code from your phone.
+              </div>
+            </div>
           </div>
         </div>
 

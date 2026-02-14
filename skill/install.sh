@@ -31,31 +31,47 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLS_DIR="$HOME/.claude/tools/grog"
 SKILLS_DIR="$HOME/.claude/skills"
 
-echo -e "${BOLD}[1/5]${NC} creating directories..."
+# Helper: set a key=value in the .env file without clobbering other entries
+set_env_var() {
+  local key="$1" val="$2" file="$TOOLS_DIR/.env"
+  touch "$file"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    local tmp
+    tmp=$(grep -v "^${key}=" "$file")
+    printf '%s\n' "$tmp" > "$file"
+    echo "${key}=${val}" >> "$file"
+  else
+    echo "${key}=${val}" >> "$file"
+  fi
+  chmod 600 "$file"
+}
+
+echo -e "${BOLD}[1/6]${NC} creating directories..."
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
 mkdir -p "$SKILLS_DIR/grog-explore"
 mkdir -p "$SKILLS_DIR/grog-review"
 mkdir -p "$SKILLS_DIR/grog-answer"
+mkdir -p "$SKILLS_DIR/grog-talk"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo "  > $TOOLS_DIR"
 echo "  > skill directories"
 
 echo ""
-echo -e "${BOLD}[2/5]${NC} copying files..."
+echo -e "${BOLD}[2/6]${NC} copying files..."
 cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
 echo "  > index.js and package.json"
 
 echo ""
-echo -e "${BOLD}[3/5]${NC} installing dependencies..."
+echo -e "${BOLD}[3/6]${NC} installing dependencies..."
 cd "$TOOLS_DIR"
 npm install --silent
 echo "  > dependencies installed"
 
 echo ""
-echo -e "${BOLD}[4/5]${NC} configuring GitHub token..."
+echo -e "${BOLD}[4/6]${NC} configuring GitHub token..."
 echo ""
 echo "To fetch GitHub issues, grog needs a Personal Access Token."
 echo "You can create one at: https://github.com/settings/tokens"
@@ -77,16 +93,50 @@ if [ "$SKIP_TOKEN" != "true" ]; then
 
     if [ -z "$GH_TOKEN" ]; then
         echo "  ! no token provided. add it manually to $TOOLS_DIR/.env"
-        echo "GH_TOKEN=" > "$TOOLS_DIR/.env"
+        set_env_var "GH_TOKEN" ""
     else
-        echo "GH_TOKEN=$GH_TOKEN" > "$TOOLS_DIR/.env"
-        chmod 600 "$TOOLS_DIR/.env"
+        set_env_var "GH_TOKEN" "$GH_TOKEN"
         echo "  > token saved to $TOOLS_DIR/.env"
     fi
 fi
 
 echo ""
-echo -e "${BOLD}[5/5]${NC} creating Claude Code skills..."
+echo -e "${BOLD}[5/6]${NC} configuring Telegram (optional)..."
+echo ""
+echo "  grog talk lets you interact with Claude Code remotely via Telegram."
+echo "  to set it up, create a bot at https://t.me/BotFather"
+echo ""
+
+SKIP_TG=false
+
+if [ -f "$TOOLS_DIR/.env" ] && grep -q "^TELEGRAM_BOT_TOKEN=" "$TOOLS_DIR/.env"; then
+    echo "  a Telegram bot token already exists"
+    read -p "  replace it? (y/N): " REPLACE_TG
+    if [[ ! "$REPLACE_TG" =~ ^[Yy]$ ]]; then
+        echo "  > keeping existing Telegram config"
+        SKIP_TG=true
+    fi
+fi
+
+if [ "$SKIP_TG" != "true" ]; then
+    read -p "  enter your Telegram bot token (or press Enter to skip): " TG_BOT_TOKEN
+
+    if [ -n "$TG_BOT_TOKEN" ]; then
+        set_env_var "TELEGRAM_BOT_TOKEN" "$TG_BOT_TOKEN"
+        echo ""
+        echo "  chat ID is optional — grog talk can auto-detect it when you first connect."
+        read -p "  enter your Telegram chat ID (or press Enter to auto-detect later): " TG_CHAT_ID
+        if [ -n "$TG_CHAT_ID" ]; then
+            set_env_var "TELEGRAM_CHAT_ID" "$TG_CHAT_ID"
+        fi
+        echo "  > Telegram config saved"
+    else
+        echo "  > skipped. add TELEGRAM_BOT_TOKEN to $TOOLS_DIR/.env later to enable."
+    fi
+fi
+
+echo ""
+echo -e "${BOLD}[6/6]${NC} creating Claude Code skills..."
 
 # Skill 1: /grog-solve - Fetch and solve a single issue
 cat > "$SKILLS_DIR/grog-solve/SKILL.md" << 'EOF'
@@ -296,6 +346,72 @@ EOF
 
 echo "  > /grog-answer skill"
 
+# Skill 5: /grog-talk - Telegram bridge for remote interaction
+cat > "$SKILLS_DIR/grog-talk/SKILL.md" << 'EOF'
+---
+name: grog-talk
+description: Open a Telegram bridge to interact with Claude Code remotely. Use when the user wants to connect Telegram for remote interaction.
+allowed-tools: Bash, Read, Write, Edit, Grep, Glob
+---
+
+# GROG Talk — Telegram Bridge
+
+Connect this Claude Code session to Telegram. The user can walk away from the terminal and keep working through their phone.
+
+## Initialize
+
+```bash
+node ~/.claude/tools/grog/index.js talk
+```
+
+If no chat ID is configured, the tool will ask the user to message the bot on Telegram. Once connected, it sends a welcome message.
+
+## Message Loop
+
+After initialization, enter a continuous receive-process-respond loop:
+
+### 1. Receive
+
+```bash
+node ~/.claude/tools/grog/index.js telegram-recv
+```
+
+This blocks for up to ~90 seconds waiting for a Telegram message.
+
+### 2. Handle the result
+
+- **`[no message]`** — No message arrived. Call `telegram-recv` again immediately. Do not print anything to the terminal.
+- **`bye` / `exit` / `quit`** — The user wants to disconnect. Send a farewell message:
+  ```bash
+  node ~/.claude/tools/grog/index.js telegram-send "Grog disconnected. See you!"
+  ```
+  Then stop the loop and tell the user in the terminal that talk mode has ended.
+- **Anything else** — This is a user request. Process it exactly as if it was typed in the terminal:
+  1. Use all available tools (Read, Edit, Bash, Grep, Glob, Write, etc.) to fulfill the request
+  2. Write a concise response to `/tmp/grog-telegram-response.md` (keep under 4000 characters)
+  3. Send it:
+     ```bash
+     node ~/.claude/tools/grog/index.js telegram-send /tmp/grog-telegram-response.md
+     ```
+  4. Go back to step 1 (Receive)
+
+## Rules
+
+- Treat every Telegram message as a direct instruction from the user
+- Full terminal output is still visible — Telegram responses should be concise summaries
+- For long code output, summarize the result rather than dumping raw content
+- If a request fails, send the error message to Telegram so the user knows what happened
+- When idle (receiving `[no message]`), loop silently — do not add any commentary or output
+- You can use ALL your tools during the loop — the user might ask you to read files, edit code, run tests, search, anything
+
+## Error Handling
+
+- If the Telegram bot token is missing, tell the user to run the installer or add TELEGRAM_BOT_TOKEN to `~/.claude/tools/grog/.env`
+- If connection fails, report the error and stop the loop
+EOF
+
+echo "  > /grog-talk skill"
+
 echo ""
 echo "┌──────────────────────────────────────────────────────────┐"
 echo "│  installation complete.                                  │"
@@ -307,6 +423,7 @@ echo "    /grog-solve <issue-url>     fetch and solve a single issue"
 echo "    /grog-explore <repo-url>    list all issues for batch processing"
 echo "    /grog-review <pr-url>       review a pull request"
 echo "    /grog-answer <issue-url>    post a summary comment to an issue"
+echo "    /grog-talk                  connect to Telegram for remote interaction"
 echo ""
 echo "  examples:"
 echo "    /grog-solve https://github.com/owner/repo/issues/123"
@@ -314,6 +431,7 @@ echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
 echo "    /grog-explore https://github.com/owner/repo"
 echo "    /grog-review https://github.com/owner/repo/pull/123"
 echo "    /grog-answer https://github.com/owner/repo/issues/123"
+echo "    /grog-talk"
 echo ""
 echo "  files:"
 echo "    tool:   $TOOLS_DIR"

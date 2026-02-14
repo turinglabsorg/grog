@@ -25,7 +25,7 @@ grog/
   agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
   api/      - SaaS API server (OAuth, billing, Stripe)
   app/      - SaaS frontend (React)
-  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review, /grog-answer)
+  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
   pm2/      - PM2 ecosystem config for production
 ```
 
@@ -200,7 +200,17 @@ Then in any Claude Code session:
 /grog-explore https://github.com/owner/repo
 /grog-review https://github.com/owner/repo/pull/456
 /grog-answer https://github.com/owner/repo/issues/123
+/grog-talk
 ```
+
+### Telegram Bridge
+
+`/grog-talk` opens a bidirectional bridge between your Claude Code session and Telegram. You can walk away from the terminal and keep interacting through your phone — every message you send on Telegram is processed as if you typed it in the terminal.
+
+Setup:
+1. Create a bot at [@BotFather](https://t.me/BotFather)
+2. Run the installer — it asks for the bot token (optional step)
+3. Type `/grog-talk` in Claude Code and message your bot to connect
 
 ## License
 
