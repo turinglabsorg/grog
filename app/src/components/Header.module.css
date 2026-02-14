@@ -109,3 +109,9 @@
 .logout:hover {
   color: var(--text-primary);
 }
+
+@media (max-width: 640px) {
+  .loginBtn {
+    display: none;
+  }
+}
