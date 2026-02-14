@@ -194,8 +194,8 @@ export function App() {
           <div className={styles.capSmall}>
             <span className={styles.capSmallIcon}>&#x1f4ac;</span>
             <div>
-              <div className={styles.capSmallTitle}>Follow-ups</div>
-              <div className={styles.capSmallDesc}>If something is unclear, Grog asks a question on the issue. Reply and it picks up where it left off.</div>
+              <div className={styles.capSmallTitle}>Dashboard Chat</div>
+              <div className={styles.capSmallDesc}>Talk to the agent while it works. Send messages from the dashboard &mdash; the agent pauses, reads your input, and continues.</div>
             </div>
           </div>
           <div className={styles.capSmall}>
@@ -357,6 +357,8 @@ export function App() {
               Create a GitHub App, connect it through the built-in dashboard,
               and mention <span className={styles.code}>@your-bot solve this</span> on
               any issue &mdash; it clones, fixes, and opens a PR automatically.
+              Create jobs directly from the dashboard, chat with the agent while it works,
+              and steer it in real time.
             </div>
 
             <div className={styles.roadmapSetup}>

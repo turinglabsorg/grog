@@ -9,6 +9,7 @@ export {
   postComment,
   addReaction,
   closeIssue,
+  createIssue,
   createPullRequest,
   acceptRepoInvitations,
 } from "./github.js";

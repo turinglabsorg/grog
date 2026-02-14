@@ -11,11 +11,12 @@ Grog is an autonomous GitHub issue solver. Point it at an issue, and it uses Cla
   GitHub Webhook ──> Agent (Express) ──> MongoDB ──> Claude ──> PR
 ```
 
-1. Someone mentions the bot on a GitHub issue
+1. Someone mentions the bot on a GitHub issue (or you create a job from the dashboard)
 2. The webhook hits the agent server
 3. The agent clones the repo, spawns Claude, and works on the fix
-4. When done, it pushes a branch and opens a pull request
-5. If the agent needs clarification, it asks — and picks back up when you reply
+4. You can send messages to the agent mid-work via the dashboard chat — it interrupts and restarts with your input
+5. When done, it pushes a branch and opens a pull request
+6. If the agent needs clarification, it asks — and picks back up when you reply
 
 ## Architecture
 
@@ -155,6 +156,8 @@ The agent includes a built-in terminal-style dashboard at `http://localhost:3000
 - **Job list** — all jobs with status, repo, issue, age, token usage
 - **Live terminal** — click any job to see real-time Claude output (SSE streaming)
 - **Stop/Start** — pause and resume jobs from the terminal panel
+- **Dashboard chat** — send messages to a running agent from the terminal panel. Messages interrupt the current turn and the agent restarts with your message in context
+- **Create jobs** — click the `+` button to create a job from any GitHub issue URL or repo URL. If you provide just a repo URL, Grog creates a GitHub issue first
 - **Budget display** — token usage tracking with hourly/daily limits in the header
 - **App status** — shows connected GitHub App with disconnect option
 

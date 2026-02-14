@@ -7,8 +7,10 @@ import {
   acceptRepoInvitations,
   fetchIssue,
   closeIssue,
+  createIssue,
   getBuffer,
   subscribe,
+  pushLine,
   getInstallationToken,
   clearTokenCache,
   getAppInfo,
@@ -16,7 +18,7 @@ import {
   checkRateLimit,
 } from "@grog/shared";
 import type { Config, JobState, JobStatus, QueuedJob, RepoConfig, AppConfig } from "@grog/shared";
-import { runAgent, stopJob } from "./runner.js";
+import { runAgent, stopJob, sendMessage } from "./runner.js";
 import { createWebhookHandler } from "./webhook.js";
 import { renderDashboard } from "./dashboard.js";
 
@@ -137,6 +139,87 @@ async function main() {
   // List jobs
   app.get("/jobs", async (_req, res) => {
     res.json(await state.listJobs());
+  });
+
+  // Create a GitHub issue from the dashboard (for repo-only URLs)
+  app.post("/jobs/create-issue", async (req, res) => {
+    const { owner, repo, title, body } = req.body as {
+      owner?: string; repo?: string; title?: string; body?: string;
+    };
+
+    if (!owner || !repo || !title) {
+      res.status(400).json({ error: "owner, repo, and title are required" });
+      return;
+    }
+
+    try {
+      const issue = await createIssue(owner, repo, title, body ?? "", config);
+      log.info(`Created issue ${owner}/${repo}#${issue.number} from dashboard`);
+      res.status(201).json({ issueNumber: issue.number, url: issue.html_url });
+    } catch (err) {
+      res.status(502).json({ error: (err as Error).message });
+    }
+  });
+
+  // Create a job from the dashboard (internal webhook)
+  app.post("/jobs", async (req, res) => {
+    const { url, instructions } = req.body as { url?: string; instructions?: string };
+    if (!url || typeof url !== "string") {
+      res.status(400).json({ error: "url is required" });
+      return;
+    }
+
+    // Parse GitHub issue URL: github.com/:owner/:repo/issues/:number
+    const issueMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+    if (!issueMatch) {
+      res.status(400).json({ error: "Invalid URL — paste a GitHub issue URL like https://github.com/owner/repo/issues/123" });
+      return;
+    }
+
+    const [, owner, repo, numStr] = issueMatch;
+    const issueNumber = parseInt(numStr, 10);
+    const jobId = `${owner}/${repo}#${issueNumber}`;
+
+    // Check if job already exists and is active
+    const existing = await state.getJobById(jobId);
+    if (existing && ["queued", "working"].includes(existing.status)) {
+      res.status(409).json({ error: `Job already ${existing.status}`, jobId });
+      return;
+    }
+
+    // Fetch issue title from GitHub
+    let issueTitle = "";
+    try {
+      const issue = await fetchIssue(owner, repo, issueNumber, config);
+      issueTitle = issue.title;
+    } catch {
+      // Non-fatal — we can still queue the job
+    }
+
+    const now = new Date().toISOString();
+    const jobState: JobState = {
+      id: jobId,
+      owner,
+      repo,
+      issueNumber,
+      status: "queued",
+      branch: `grog/issue-${issueNumber}`,
+      issueTitle,
+      triggerCommentId: 0,
+      startedAt: now,
+      updatedAt: now,
+    };
+    await state.upsertJob(jobState);
+
+    // If instructions provided, store them as a user chat message
+    if (instructions && instructions.trim()) {
+      const line = { ts: Date.now(), type: "user" as const, content: instructions.trim() };
+      pushLine(jobId, line);
+      await state.appendJobLog(jobId, line);
+    }
+
+    log.info(`Job ${jobId} created from dashboard${instructions ? " with instructions" : ""}`);
+    res.status(201).json({ queued: true, jobId, issueTitle });
   });
 
   // SSE stream for live job output
@@ -288,6 +371,52 @@ async function main() {
 
     log.info(`Job ${jobId} restarted by user`);
     res.json(job);
+  });
+
+  // Send a chat message to a job
+  const IDLE_STATUSES: JobStatus[] = ["stopped", "waiting_for_reply", "failed", "pr_opened", "completed"];
+
+  app.post("/jobs/:id/message", async (req, res) => {
+    const jobId = decodeURIComponent(req.params.id);
+    const { content } = req.body as { content?: string };
+
+    if (!content || typeof content !== "string" || !content.trim()) {
+      res.status(400).json({ error: "content is required" });
+      return;
+    }
+
+    const job = await state.getJobById(jobId);
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    // Store the message as a user log line
+    const line = { ts: Date.now(), type: "user" as const, content: content.trim() };
+    pushLine(jobId, line);
+    await state.appendJobLog(jobId, line);
+
+    // If job is working, pipe the message directly to the running agent
+    if (job.status === "working") {
+      const sent = sendMessage(jobId, content.trim());
+      if (sent) {
+        log.info(`Message piped to running agent for ${jobId}`);
+        res.json({ ok: true, status: job.status, delivered: true });
+        return;
+      }
+      // Process not found — fall through to requeue
+    }
+
+    // If job is idle, requeue so the agent restarts with chat context
+    if (IDLE_STATUSES.includes(job.status) || (job.status === "working")) {
+      job.status = "queued";
+      job.updatedAt = new Date().toISOString();
+      await state.upsertJob(job);
+      log.info(`Job ${jobId} requeued via chat message`);
+    }
+    // If queued, message is already stored — agent will see it when it starts
+
+    res.json({ ok: true, status: job.status });
   });
 
   // Repo config API

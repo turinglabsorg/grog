@@ -15,12 +15,19 @@ import {
   createLogger,
   TOKENS_PER_CREDIT,
 } from "@grog/shared";
-import { buildSolvePrompt } from "./prompt.js";
+import { buildSolvePrompt, buildChatPrompt } from "./prompt.js";
 
 const log = createLogger("runner");
 
-// Track active Claude processes so we can kill them on stop
-const activeProcesses = new Map<string, { kill: () => void }>();
+// Track active Claude processes so we can kill them on stop or send messages
+interface ProcessHandle {
+  kill: () => void;
+  write: (msg: string) => void;
+  interrupt: () => void;
+}
+const activeProcesses = new Map<string, ProcessHandle>();
+// Track jobs that were deliberately interrupted by a chat message (not a failure)
+const interruptedJobs = new Set<string>();
 
 /** Stop a running job by killing its Claude process. Returns true if a process was found. */
 export function stopJob(jobId: string): boolean {
@@ -28,6 +35,18 @@ export function stopJob(jobId: string): boolean {
   if (entry) {
     entry.kill();
     activeProcesses.delete(jobId);
+    return true;
+  }
+  return false;
+}
+
+/** Send a message to a running agent — interrupts current turn so the message is processed immediately. */
+export function sendMessage(jobId: string, message: string): boolean {
+  const entry = activeProcesses.get(jobId);
+  if (entry) {
+    interruptedJobs.add(jobId);
+    entry.interrupt();
+    entry.write(message);
     return true;
   }
   return false;
@@ -65,15 +84,16 @@ function spawnClaude(
   cwd: string,
   timeoutMs: number,
   onEvent?: (event: any) => void,
-  onSpawn?: (handle: { kill: () => void }) => void
+  onSpawn?: (handle: ProcessHandle) => void
 ): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(
       "claude",
       [
         "-p",
-        prompt,
         "--verbose",
+        "--input-format",
+        "stream-json",
         "--allowedTools",
         "Bash(git:*),Bash(npm:*),Bash(yarn:*),Bash(node:*),Bash(npx:*),Read,Edit,Write,Glob,Grep",
         "--output-format",
@@ -81,7 +101,7 @@ function spawnClaude(
       ],
       {
         cwd,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         // Whitelist safe env vars — never expose full process.env (1.6)
         env: {
           PATH: process.env.PATH ?? "",
@@ -96,8 +116,50 @@ function spawnClaude(
       }
     );
 
-    // Expose the process handle so callers can kill it
-    if (onSpawn) onSpawn({ kill: () => { proc.kill("SIGTERM"); } });
+    log.info(`Claude process spawned, pid=${proc.pid}`);
+
+    let sessionId = "";
+    let stdinCloseTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Send the initial prompt immediately — stream-json mode waits for stdin before emitting events
+    if (proc.stdin && !proc.stdin.destroyed) {
+      const initMsg = JSON.stringify({
+        type: "user",
+        message: { role: "user", content: prompt },
+        session_id: "",
+        parent_tool_use_id: null,
+      });
+      proc.stdin.write(initMsg + "\n");
+      log.info("Initial prompt sent via stdin");
+    }
+
+    // Schedule stdin close after a result — gives time for follow-up messages
+    function scheduleStdinClose() {
+      if (stdinCloseTimer) clearTimeout(stdinCloseTimer);
+      stdinCloseTimer = setTimeout(() => {
+        if (proc.stdin && !proc.stdin.destroyed) {
+          proc.stdin.end();
+        }
+      }, 3000);
+    }
+
+    // Expose the process handle so callers can kill it, interrupt it, or send messages
+    if (onSpawn) onSpawn({
+      kill: () => { proc.kill("SIGTERM"); },
+      interrupt: () => { if (!proc.killed) proc.kill("SIGINT"); },
+      write: (msg: string) => {
+        if (proc.killed || !proc.stdin || proc.stdin.destroyed) return;
+        // Cancel pending stdin close — more interaction coming
+        if (stdinCloseTimer) { clearTimeout(stdinCloseTimer); stdinCloseTimer = null; }
+        const jsonMsg = JSON.stringify({
+          type: "user",
+          message: { role: "user", content: msg },
+          session_id: sessionId,
+          parent_tool_use_id: null,
+        });
+        proc.stdin.write(jsonMsg + "\n");
+      },
+    });
 
     let text = "";
     let usage = { inputTokens: 0, outputTokens: 0 };
@@ -117,9 +179,16 @@ function spawnClaude(
     const rl = createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
       if (!line.trim()) return;
+      log.info(`claude stdout: ${line.slice(0, 200)}`);
       try {
         const event = JSON.parse(line);
         if (onEvent) onEvent(event);
+
+        // Capture session ID from init event (needed for follow-up chat messages)
+        if (event.type === "system" && event.subtype === "init") {
+          sessionId = event.session_id ?? "";
+          log.info(`Claude init event received, session_id=${sessionId ? sessionId.slice(0, 8) + "..." : "(empty)"}`);
+        }
 
         if (event.type === "assistant" && event.message?.content) {
           for (const block of event.message.content) {
@@ -137,6 +206,11 @@ function spawnClaude(
           if (typeof event.result === "string") {
             text = event.result;
           }
+          // Only close stdin if this is a final solve result — chat responses keep the session alive
+          const resultText = typeof event.result === "string" ? event.result : text;
+          if (/PR_READY|NEEDS_CLARIFICATION/.test(resultText)) {
+            scheduleStdinClose();
+          }
         }
 
         if (event.usage) {
@@ -153,18 +227,21 @@ function spawnClaude(
     });
 
     proc.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
+      const chunk = data.toString();
+      stderr += chunk;
+      log.info(`claude stderr: ${chunk.trimEnd()}`);
     });
 
     proc.on("close", (code) => {
       clearTimeout(timer);
+      if (stdinCloseTimer) clearTimeout(stdinCloseTimer);
       if (timedOut) {
         resolve({ text, timedOut: true, usage: usage.inputTokens > 0 ? usage : undefined });
         return;
       }
+      log.info(`Claude process closed with code ${code}`);
       if (code !== 0) {
-        log.error(`Claude exited with code ${code}`);
-        log.debug(`stderr: ${stderr.slice(-500)}`);
+        log.error(`Claude exited with code ${code}, stderr: ${stderr.slice(-500)}`);
       }
       resolve({ text, usage: usage.inputTokens > 0 ? usage : undefined });
     });
@@ -389,8 +466,14 @@ export async function runAgent(
 
     jobState.issueTitle = issue.title;
 
-    // Build prompt
-    const prompt = buildSolvePrompt(issue, comments, repoPath, config, job.commentId);
+    // Check for dashboard chat messages
+    const allLogs = await state.getJobLogs(jobId);
+    const chatMessages = allLogs.filter((l) => l.type === "user");
+
+    // Build prompt — use chat prompt if operator has sent messages
+    const prompt = chatMessages.length > 0
+      ? buildChatPrompt(issue, comments, repoPath, config, chatMessages, job.commentId)
+      : buildSolvePrompt(issue, comments, repoPath, config, job.commentId);
 
     // Spawn Claude with event streaming
     logLine({ ts: Date.now(), type: "status", content: "Running Claude agent" });
@@ -467,6 +550,23 @@ export async function runAgent(
       // Cleanup work directory on timeout (1.7)
       try { fs.rmSync(jobDir, { recursive: true, force: true }); } catch {}
 
+      return;
+    }
+
+    // If the job was stopped externally (via dashboard stop button), don't overwrite status
+    const freshJob = await state.getJobById(jobId);
+    if (freshJob?.status === "stopped") {
+      jlog.info("Job was stopped by user — skipping result processing");
+      return;
+    }
+
+    // If the job was interrupted by a chat message, requeue so it restarts with chat context
+    if (interruptedJobs.has(jobId)) {
+      interruptedJobs.delete(jobId);
+      jlog.info("Job was interrupted by chat message — requeueing");
+      jobState.status = "queued";
+      jobState.updatedAt = new Date().toISOString();
+      await state.upsertJob(jobState);
       return;
     }
 
@@ -573,6 +673,23 @@ export async function runAgent(
       await state.upsertJob(jobState);
     }
   } catch (err) {
+    // If job was stopped by user, don't treat the kill as an error
+    const stoppedJob = await state.getJobById(jobId);
+    if (stoppedJob?.status === "stopped") {
+      jlog.info("Job was stopped by user — ignoring process error");
+      return;
+    }
+
+    // If interrupted by chat message, requeue instead of failing
+    if (interruptedJobs.has(jobId)) {
+      interruptedJobs.delete(jobId);
+      jlog.info("Job was interrupted by chat message — requeueing");
+      jobState.status = "queued";
+      jobState.updatedAt = new Date().toISOString();
+      await state.upsertJob(jobState);
+      return;
+    }
+
     const errorMsg = (err as Error).message ?? String(err);
     jlog.error(`Error: ${errorMsg}`);
     logLine({ ts: Date.now(), type: "error", content: errorMsg.slice(0, 300) });
@@ -614,6 +731,7 @@ export async function runAgent(
     }
   } finally {
     activeProcesses.delete(jobId);
+    interruptedJobs.delete(jobId);
     cleanup(jobId);
 
     // Post-completion credit deduction (4.2)

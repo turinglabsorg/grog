@@ -1,6 +1,6 @@
 export interface OutputLine {
   ts: number;
-  type: "text" | "tool" | "error" | "status";
+  type: "text" | "tool" | "error" | "status" | "user";
   content: string;
 }
 

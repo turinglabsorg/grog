@@ -22,6 +22,10 @@
 - [x] Stop worker button in log panel (with confirmation)
 - [x] CLI tool for manual job runs (`npx tsx cli/run-job.ts`)
 - [x] Skips closed issues in CLI mode
+- [x] Dashboard chat: send messages to running agents via interactive stdin (`--input-format stream-json`)
+- [x] Chat interrupt: SIGINT pauses current turn, agent restarts with chat context
+- [x] Create jobs from dashboard: `+` button to point at a GitHub issue URL or repo URL
+- [x] Auto-create issues: if a repo URL is provided, Grog creates a GitHub issue first
 
 ## Phase 2 — Hardening
 

@@ -1,4 +1,4 @@
-import type { Issue, Comment, Config } from "@grog/shared";
+import type { Issue, Comment, Config, OutputLine } from "@grog/shared";
 
 export function buildSolvePrompt(
   issue: Issue,
@@ -77,5 +77,33 @@ If you need more information or the issue is ambiguous:
 - DO commit your changes to the current branch.
 - Keep changes minimal and focused on the issue.
 - If the issue is unclear or you cannot solve it, use NEEDS_CLARIFICATION and explain what you need.
+`;
+}
+
+export function buildChatPrompt(
+  issue: Issue,
+  comments: Comment[],
+  repoPath: string,
+  config: Config,
+  chatMessages: OutputLine[],
+  triggerCommentId?: number
+): string {
+  const base = buildSolvePrompt(issue, comments, repoPath, config, triggerCommentId);
+
+  const chatBlock = chatMessages
+    .map((m) => {
+      const time = new Date(m.ts).toISOString();
+      return `[${time}] Dashboard operator: ${m.content}`;
+    })
+    .join("\n");
+
+  return `${base}
+## Dashboard Chat
+
+The dashboard operator has sent you the following messages. Address them while continuing your work on the issue above.
+
+${chatBlock}
+
+Focus on the most recent message(s) — they represent what the operator wants you to do right now. Incorporate their feedback or instructions into your work.
 `;
 }

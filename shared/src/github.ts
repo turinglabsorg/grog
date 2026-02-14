@@ -207,6 +207,31 @@ export async function closeIssue(
   }
 }
 
+export async function createIssue(
+  owner: string,
+  repo: string,
+  title: string,
+  body: string,
+  config: Config
+): Promise<{ number: number; html_url: string }> {
+  const res = await fetchWithRetry(
+    `${API}/repos/${owner}/${repo}/issues`,
+    {
+      method: "POST",
+      headers: { ...headers(config), "Content-Type": "application/json" },
+      body: JSON.stringify({ title, body }),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(
+      `Failed to create issue: ${res.status} ${res.statusText} — ${err}`
+    );
+  }
+  const issue = (await res.json()) as { number: number; html_url: string };
+  return issue;
+}
+
 export async function createPullRequest(
   owner: string,
   repo: string,

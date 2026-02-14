@@ -124,6 +124,7 @@ export function renderDashboard(jobs: JobState[], configured = true): string {
   .term-line.text { color: #c9d1d9; }
   .term-line.status { border-left-color: #22c55e; color: #22c55e; font-weight: 600; }
   .term-line.error { border-left-color: #f85149; color: #f85149; }
+  .term-line.user { border-left-color: #f59e0b; color: #f59e0b; }
   .term-time { color: #484f58; font-size: 10px; margin-right: 6px; }
   .term-id { color: #30363d; font-size: 10px; margin-right: 4px; font-family: inherit; }
 
@@ -137,12 +138,40 @@ export function renderDashboard(jobs: JobState[], configured = true): string {
   .stop-btn.start:hover { background: #2ea043; }
   .stop-btn:disabled { opacity: .5; cursor: not-allowed; }
 
+  /* Chat input */
+  .chat-row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .chat-row input { flex: 1; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; font-family: inherit; font-size: 13px; padding: 8px 10px; border-radius: 4px; outline: none; }
+  .chat-row input:focus { border-color: #f59e0b; }
+  .chat-row input::placeholder { color: #484f58; }
+  .chat-row button { background: #f59e0b; color: #0d1117; border: none; border-radius: 4px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .chat-row button:hover { background: #fbbf24; }
+
   /* Toast */
   .toast-box { position: fixed; bottom: 16px; right: 16px; z-index: 200; }
   .toast { background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 14px; border-radius: 4px; font-size: 12px; margin-top: 6px; animation: fadein .2s ease, fadeout .3s ease 3s forwards; }
   .toast-err { border-color: #f85149; color: #f85149; }
   @keyframes fadein { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
   @keyframes fadeout { from { opacity:1; } to { opacity:0; } }
+
+  /* New job button + modal */
+  .add-btn { background: #238636; color: #fff; border: none; border-radius: 6px; width: 28px; height: 28px; font-size: 18px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; margin-left: auto; transition: background .15s; }
+  .add-btn:hover { background: #2ea043; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 300; display: none; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: #161b22; border: 1px solid #30363d; border-radius: 8px; width: 440px; max-width: 90vw; padding: 20px; }
+  .modal h3 { color: #c9d1d9; font-size: 14px; margin-bottom: 14px; }
+  .modal label { display: block; color: #8b949e; font-size: 11px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
+  .modal input, .modal textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; font-family: inherit; font-size: 13px; padding: 8px 10px; border-radius: 4px; margin-bottom: 12px; outline: none; }
+  .modal input:focus, .modal textarea:focus { border-color: #58a6ff; }
+  .modal textarea { min-height: 60px; resize: vertical; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-actions button { padding: 8px 16px; border-radius: 6px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border: none; }
+  .modal-cancel { background: #21262d; color: #c9d1d9; }
+  .modal-cancel:hover { background: #30363d; }
+  .modal-submit { background: #238636; color: #fff; }
+  .modal-submit:hover { background: #2ea043; }
+  .modal-submit:disabled { opacity: .5; cursor: not-allowed; }
+  .modal-error { color: #f85149; font-size: 12px; margin-bottom: 8px; display: none; }
 </style>
 </head>
 <body>
@@ -152,6 +181,22 @@ export function renderDashboard(jobs: JobState[], configured = true): string {
     <span id="appStatus"></span>
     <span id="budgetInfo"></span>
     <span id="jobCount"></span>
+  </div>
+  <button class="add-btn" id="addJobBtn" title="New job">+</button>
+</div>
+
+<div class="modal-overlay" id="newJobOverlay">
+  <div class="modal">
+    <h3>New Job</h3>
+    <label for="newJobUrl">GitHub URL</label>
+    <input id="newJobUrl" type="text" placeholder="https://github.com/owner/repo or /issues/123" autocomplete="off" />
+    <label for="newJobInstructions">Instructions <span style="color:#484f58">(optional)</span></label>
+    <textarea id="newJobInstructions" placeholder="Tell the agent what to do..."></textarea>
+    <div class="modal-error" id="newJobError"></div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="newJobCancel">Cancel</button>
+      <button class="modal-submit" id="newJobSubmit">Queue</button>
+    </div>
   </div>
 </div>
 
@@ -191,6 +236,10 @@ export function renderDashboard(jobs: JobState[], configured = true): string {
   </div>
   <div class="terminal" id="terminal"></div>
   <div class="panel-footer" id="panelFooter" style="display:none;">
+    <div class="chat-row" id="chatRow">
+      <input type="text" id="chatInput" placeholder="Send a message to the agent..." />
+      <button id="chatSend">Send</button>
+    </div>
     <button class="stop-btn" id="stopBtn">STOP AGENT</button>
   </div>
 </div>
@@ -235,7 +284,14 @@ async function refresh() {
       var pj=jobs.find(function(j){return j.id===activeJobId;});
       if(pj){
         if(pj.tokenUsage)document.getElementById("panelMeta").textContent=fmtTok(pj.tokenUsage.inputTokens)+" in / "+fmtTok(pj.tokenUsage.outputTokens)+" out";
-        if(pj.status!==activeJobStatus){activeJobStatus=pj.status;updateStopBtn(pj.status);}
+        if(pj.status!==activeJobStatus){
+          var prev=activeJobStatus;
+          activeJobStatus=pj.status;
+          updateStopBtn(pj.status);
+          // Status changed while panel is open — reconnect
+          if(pj.status==="working"&&prev!=="working"){connectStream(activeJobId);}
+          if(prev==="working"&&pj.status!=="working"){fetchLogs(activeJobId);}
+        }
       }
     }
   } catch(e){console.error("refresh",e);}
@@ -273,6 +329,30 @@ function updateStopBtn(status){
   btn.disabled=false;
 }
 
+function connectStream(jobId){
+  if(activeES){activeES.close();activeES=null;}
+  var term=document.getElementById("terminal");
+  var enc=encodeURIComponent(jobId);
+  term.classList.add("streaming");
+  var es=new EventSource("/jobs/"+enc+"/stream");
+  activeES=es;
+  es.onmessage=function(e){
+    try{var line=JSON.parse(e.data);if(line.type==="done"){term.classList.remove("streaming");es.close();activeES=null;return;}appendLine(line);}catch(x){}
+  };
+  es.onerror=function(){term.classList.remove("streaming");es.close();activeES=null;};
+}
+
+function fetchLogs(jobId){
+  if(activeES){activeES.close();activeES=null;}
+  var term=document.getElementById("terminal");
+  var enc=encodeURIComponent(jobId);
+  term.classList.remove("streaming");
+  fetch("/jobs/"+enc+"/logs").then(function(r){return r.json();}).then(function(lines){
+    if(lines.length===0){appendLine({type:"status",content:"No logs available."});return;}
+    for(var i=0;i<lines.length;i++)appendLine(lines[i]);
+  }).catch(function(){appendLine({type:"error",content:"Failed to load logs."});});
+}
+
 function openPanel(jobId,title,status){
   if(activeES){activeES.close();activeES=null;}
   seenIds={};
@@ -284,23 +364,8 @@ function openPanel(jobId,title,status){
   document.getElementById("panel").classList.add("open");
   document.getElementById("overlay").classList.add("open");
   updateStopBtn(status);
-  var term=document.getElementById("terminal");
-  var enc=encodeURIComponent(jobId);
-  if(status==="working"){
-    term.classList.add("streaming");
-    var es=new EventSource("/jobs/"+enc+"/stream");
-    activeES=es;
-    es.onmessage=function(e){
-      try{var line=JSON.parse(e.data);if(line.type==="done"){term.classList.remove("streaming");es.close();activeES=null;return;}appendLine(line);}catch(x){}
-    };
-    es.onerror=function(){term.classList.remove("streaming");es.close();activeES=null;};
-  } else {
-    term.classList.remove("streaming");
-    fetch("/jobs/"+enc+"/logs").then(function(r){return r.json();}).then(function(lines){
-      if(lines.length===0){appendLine({type:"status",content:"No logs available."});return;}
-      for(var i=0;i<lines.length;i++)appendLine(lines[i]);
-    }).catch(function(){appendLine({type:"error",content:"Failed to load logs."});});
-  }
+  if(status==="working"||status==="queued"){connectStream(jobId);}
+  else{fetchLogs(jobId);}
 }
 
 var seenIds={};
@@ -318,7 +383,8 @@ async function appendLine(line){
   var d=document.createElement("div");
   d.className="term-line "+(line.type||"text");
   var ts=line.ts?'<span class="term-time">'+new Date(line.ts).toLocaleTimeString()+'</span> ':"";
-  d.innerHTML='<span class="term-id">'+id+'</span> '+ts+esc(line.content||"");
+  var prefix=line.type==="user"?"You: ":"";
+  d.innerHTML='<span class="term-id">'+id+'</span> '+ts+esc(prefix+line.content||"");
   document.getElementById("terminal").appendChild(d);
   d.scrollIntoView({block:"end"});
 }
@@ -446,6 +512,27 @@ document.getElementById("stopBtn").addEventListener("click",async function(){
   }
 });
 
+// Chat send handler
+async function sendChatMessage(){
+  if(!activeJobId)return;
+  var input=document.getElementById("chatInput");
+  var content=input.value.trim();
+  if(!content)return;
+  input.value="";
+  // Only append locally if no SSE stream — otherwise the stream delivers it back
+  if(!activeES)appendLine({ts:Date.now(),type:"user",content:content});
+  try{
+    var r=await fetch("/jobs/"+encodeURIComponent(activeJobId)+"/message",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:content})});
+    if(!r.ok){var e=await r.json();throw new Error(e.error||"Send failed");}
+    var data=await r.json();
+    if(data.status==="queued"&&activeJobStatus!=="queued"){activeJobStatus="queued";updateStopBtn("queued");}
+    showToast(data.delivered?"Message delivered to agent":"Message sent — agent will restart");
+    refresh();
+  }catch(e){showToast("Error: "+e.message,true);}
+}
+document.getElementById("chatSend").addEventListener("click",sendChatMessage);
+document.getElementById("chatInput").addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();sendChatMessage();}});
+
 function showToast(msg,isErr){
   var box=document.getElementById("toasts");
   var t=document.createElement("div");
@@ -458,6 +545,60 @@ function showToast(msg,isErr){
 setInterval(refresh,2000);
 setInterval(refreshBudget,10000);
 refreshBudget();
+
+// New job modal
+(function(){
+  var overlay=document.getElementById("newJobOverlay");
+  var urlInput=document.getElementById("newJobUrl");
+  var instrInput=document.getElementById("newJobInstructions");
+  var errEl=document.getElementById("newJobError");
+  var submitBtn=document.getElementById("newJobSubmit");
+
+  function openModal(){overlay.classList.add("open");urlInput.value="";instrInput.value="";errEl.style.display="none";submitBtn.disabled=false;submitBtn.textContent="Queue";urlInput.focus();}
+  function closeModal(){overlay.classList.remove("open");}
+
+  document.getElementById("addJobBtn").addEventListener("click",openModal);
+  document.getElementById("newJobCancel").addEventListener("click",closeModal);
+  overlay.addEventListener("click",function(e){if(e.target===overlay)closeModal();});
+  document.addEventListener("keydown",function(e){if(e.key==="Escape"&&overlay.classList.contains("open"))closeModal();});
+
+  submitBtn.addEventListener("click",async function(){
+    errEl.style.display="none";
+    var url=urlInput.value.trim();
+    var instructions=instrInput.value.trim();
+    if(!url){errEl.textContent="Paste a GitHub URL";errEl.style.display="block";return;}
+
+    // If repo URL without issue number and instructions given, create an issue first
+    var isIssueUrl=/github\\.com\\/[^/]+\\/[^/]+\\/issues\\/\\d+/.test(url);
+    var repoMatch=url.match(/github\\.com\\/([^/]+)\\/([^/]+)/);
+    if(!repoMatch){errEl.textContent="Invalid GitHub URL";errEl.style.display="block";return;}
+    if(!isIssueUrl&&!instructions){errEl.textContent="For a repo URL, instructions are required (they become the issue body)";errEl.style.display="block";return;}
+
+    submitBtn.disabled=true;submitBtn.textContent="Creating...";
+    try{
+      var targetUrl=url;
+      // If repo-only URL, create an issue on GitHub first
+      if(!isIssueUrl){
+        var owner=repoMatch[1],repo=repoMatch[2];
+        var title=instructions.split("\\n")[0].slice(0,80);
+        var ir=await fetch("/jobs/create-issue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({owner:owner,repo:repo,title:title,body:instructions})});
+        if(!ir.ok){var ie=await ir.json();throw new Error(ie.error||"Failed to create issue");}
+        var id=await ir.json();
+        targetUrl="https://github.com/"+owner+"/"+repo+"/issues/"+id.issueNumber;
+        instructions="";// already in the issue body
+      }
+      var r=await fetch("/jobs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:targetUrl,instructions:instructions})});
+      var data=await r.json();
+      if(!r.ok)throw new Error(data.error||"Failed to create job");
+      showToast("Job queued: "+data.jobId);
+      closeModal();
+      refresh();
+    }catch(e){
+      errEl.textContent=e.message;errEl.style.display="block";
+      submitBtn.disabled=false;submitBtn.textContent="Queue";
+    }
+  });
+})();
 </script>
 </body>
 </html>`;
