@@ -16,9 +16,9 @@ Fetches a pull request with the full diff, inline comments, and review history. 
 
 Lists all open issues from a repository or GitHub Project, grouped by labels or status columns. Lets you pick issues and batch-process them one by one.
 
-### `/grog-answer <issue-url>`
+### `/grog-answer <issue-or-pr-url>`
 
-Posts a summary comment to a GitHub issue. Gathers context from your recent work, writes a markdown summary, and posts it directly on the issue. Use after solving or reviewing to share what was done.
+Posts a summary comment to a GitHub issue or pull request. Gathers context from your recent work, writes a markdown summary, and posts it directly on the issue or PR. Use after solving or reviewing to share what was done.
 
 ### `/grog-talk`
 
@@ -67,7 +67,7 @@ Open any Claude Code session and type:
 /grog-solve https://github.com/owner/repo/issues/123
 /grog-review https://github.com/owner/repo/pull/456
 /grog-explore https://github.com/owner/repo
-/grog-answer https://github.com/owner/repo/issues/123
+/grog-answer https://github.com/owner/repo/issues/123   # or /pull/456
 /grog-talk
 ```
 

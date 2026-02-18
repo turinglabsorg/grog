@@ -258,10 +258,10 @@ export function App() {
               <div className={styles.skillCmdLine}>
                 <span className={styles.skillPrompt}>$</span>
                 <span className={styles.skillCmd}>/grog-answer</span>
-                <span className={styles.skillArg}>{'<issue-url>'}</span>
+                <span className={styles.skillArg}>{'<issue-or-pr-url>'}</span>
               </div>
               <div className={styles.skillDesc}>
-                Posts a summary comment to a GitHub issue with context from your recent work.
+                Posts a summary comment to a GitHub issue or PR with context from your recent work.
               </div>
             </div>
             <div className={styles.skillRow}>

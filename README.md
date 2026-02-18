@@ -202,7 +202,7 @@ Then in any Claude Code session:
 /grog-solve https://github.com/owner/repo/issues/123
 /grog-explore https://github.com/owner/repo
 /grog-review https://github.com/owner/repo/pull/456
-/grog-answer https://github.com/owner/repo/issues/123
+/grog-answer https://github.com/owner/repo/issues/123  # or /pull/123
 /grog-talk
 ```
 

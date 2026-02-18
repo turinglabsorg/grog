@@ -297,22 +297,22 @@ EOF
 
 echo "  > /grog-review skill"
 
-# Skill 4: /grog-answer - Post a summary comment to a GitHub issue
+# Skill 4: /grog-answer - Post a summary comment to a GitHub issue or PR
 cat > "$SKILLS_DIR/grog-answer/SKILL.md" << 'EOF'
 ---
 name: grog-answer
-description: Post a summary comment to a GitHub issue. Use when the user wants to post their work summary or a comment to an issue.
+description: Post a summary comment to a GitHub issue or pull request. Use when the user wants to post their work summary or a comment to an issue or PR.
 allowed-tools: Bash, Read, Write
-argument-hint: <github-issue-url>
+argument-hint: <github-issue-or-pr-url>
 ---
 
-# GROG Answer - Post Summary to GitHub Issue
+# GROG Answer - Post Summary to GitHub Issue or PR
 
-Post a summary of what was done as a comment on a GitHub issue.
+Post a summary of what was done as a comment on a GitHub issue or pull request.
 
 ## Usage
 
-When the user wants to post a summary or comment to a GitHub issue:
+When the user wants to post a summary or comment to a GitHub issue or PR:
 
 1. Gather the summary of what was done. Sources:
    - Your own context from recent work (commits, code changes, conversation)
@@ -333,14 +333,15 @@ When the user wants to post a summary or comment to a GitHub issue:
 
 Write a clear markdown summary with:
 - What was changed (bullet points)
-- Why (link back to the issue context)
+- Why (link back to the issue/PR context)
 - Any notes for reviewers
 
 Keep it concise but informative.
 
 ## Error Handling
 
-- If no URL is provided, ask the user for the GitHub issue URL
+- If no URL is provided, ask the user for the GitHub issue or PR URL
+- Both issue URLs (`/issues/123`) and PR URLs (`/pull/123`) are supported
 - If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
 EOF
 
@@ -422,7 +423,7 @@ echo ""
 echo "    /grog-solve <issue-url>     fetch and solve a single issue"
 echo "    /grog-explore <repo-url>    list all issues for batch processing"
 echo "    /grog-review <pr-url>       review a pull request"
-echo "    /grog-answer <issue-url>    post a summary comment to an issue"
+echo "    /grog-answer <url>          post a summary comment to an issue or PR"
 echo "    /grog-talk                  connect to Telegram for remote interaction"
 echo ""
 echo "  examples:"
@@ -430,7 +431,7 @@ echo "    /grog-solve https://github.com/owner/repo/issues/123"
 echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
 echo "    /grog-explore https://github.com/owner/repo"
 echo "    /grog-review https://github.com/owner/repo/pull/123"
-echo "    /grog-answer https://github.com/owner/repo/issues/123"
+echo "    /grog-answer https://github.com/owner/repo/issues/123  # or /pull/123"
 echo "    /grog-talk"
 echo ""
 echo "  files:"

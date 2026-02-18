@@ -1080,19 +1080,25 @@ async function handleExplore(url) {
 }
 
 /**
- * Handle 'answer' command - post a summary comment to a GitHub issue
+ * Handle 'answer' command - post a summary comment to a GitHub issue or PR
  */
 async function handleAnswer(issueUrl, summaryFilePath) {
-  const parsed = parseGitHubIssueUrl(issueUrl);
+  const issueParsed = parseGitHubIssueUrl(issueUrl);
+  const prParsed = parseGitHubPrUrl(issueUrl);
+  const parsed = issueParsed || prParsed;
   if (!parsed) {
-    console.error("! error: invalid GitHub issue URL");
+    console.error("! error: invalid GitHub issue or PR URL");
     console.error("  expected: https://github.com/owner/repo/issues/123");
+    console.error("       or:  https://github.com/owner/repo/pull/123");
     process.exit(1);
   }
 
+  const number = parsed.issueNumber || parsed.prNumber;
+  const type = issueParsed ? "issue" : "PR";
+
   if (!summaryFilePath) {
     console.error("! error: missing summary file path");
-    console.error("  usage: grog answer <issue-url> <path-to-summary-file>");
+    console.error("  usage: grog answer <issue-or-pr-url> <path-to-summary-file>");
     process.exit(1);
   }
 
@@ -1112,10 +1118,10 @@ async function handleAnswer(issueUrl, summaryFilePath) {
 
   try {
     console.log(
-      `> posting comment to ${parsed.owner}/${parsed.repo}#${parsed.issueNumber}...`,
+      `> posting comment to ${parsed.owner}/${parsed.repo}#${number} (${type})...`,
     );
 
-    const url = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${parsed.issueNumber}/comments`;
+    const url = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${number}/comments`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
