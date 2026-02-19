@@ -71,6 +71,28 @@ Open any Claude Code session and type:
 /grog-talk
 ```
 
+## Personality & Voice
+
+Grog has a default personality: sarcastic, opinionated, dry wit — a developer tool with soul. It gets the job done but isn't going to pretend every bug is a delightful puzzle.
+
+### Customizing per project
+
+Create a `.grog/config.json` in your project root to override the default personality:
+
+```json
+{
+  "personality": {
+    "tone": "formal and professional, no jokes",
+    "style": "concise RFC-like technical writing",
+    "catchphrase": "As per specification..."
+  }
+}
+```
+
+All fields under `personality` are free-form strings. Grog reads this file at the start of every task and adopts whatever voice you define. If the file doesn't exist, you get the sarcastic default.
+
+The personality affects commentary, summaries, and GitHub comments — never the quality of code or analysis.
+
 ## How it works
 
 The skills call a local Node.js script (`~/.claude/tools/grog/index.js`) that talks to the GitHub API using your token. The script fetches the issue/PR data, downloads image attachments, and prints everything to stdout. Claude Code reads the output and acts on it — analyzing the code, implementing fixes, or writing reviews.
