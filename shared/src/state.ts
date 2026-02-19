@@ -221,6 +221,14 @@ export class StateManager {
     return doc ?? undefined;
   }
 
+  async getUserByLogin(login: string): Promise<GrogUser | undefined> {
+    const doc = await this.usersCollection.findOne(
+      { login },
+      { projection: { _id: 0 } }
+    );
+    return doc ?? undefined;
+  }
+
   // --- Webhook Registrations ---
 
   async upsertWebhookRegistration(reg: WebhookRegistration): Promise<void> {

@@ -49,6 +49,40 @@ async function main() {
     res.json(await state.getStats());
   });
 
+  // Admin grant credits
+  app.post("/admin/grant-credits", requireAuth(config, state), requireAdmin(config), async (req, res) => {
+    const { login, amount } = req.body as { login?: string; amount?: number };
+
+    if (!login || typeof login !== "string") {
+      res.status(400).json({ error: "login is required" });
+      return;
+    }
+    if (!amount || typeof amount !== "number" || amount <= 0 || !Number.isInteger(amount)) {
+      res.status(400).json({ error: "amount must be a positive integer" });
+      return;
+    }
+
+    const user = await state.getUserByLogin(login);
+    if (!user) {
+      res.status(404).json({ error: `User not found: ${login}` });
+      return;
+    }
+
+    const balance = await state.addCredits(user.githubId, amount);
+    await state.recordCreditTransaction({
+      id: `grant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      userId: user.githubId,
+      type: "grant",
+      amount,
+      balanceAfter: balance.credits,
+      description: `Admin grant of ${amount} credits`,
+      createdAt: new Date().toISOString(),
+    });
+
+    log.info(`Admin granted ${amount} credits to ${login} (${user.githubId})`);
+    res.json({ login, githubId: user.githubId, credits: balance.credits });
+  });
+
   // Health check
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });

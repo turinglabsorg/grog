@@ -1,9 +1,25 @@
 const API_BASE = "";
 
+function getCsrfToken(): string | undefined {
+  const match = document.cookie.match(/(?:^|;\s*)grog_csrf=([^;]*)/);
+  return match ? match[1] : undefined;
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = init?.method?.toUpperCase() ?? "GET";
+  const headers = new Headers(init?.headers);
+
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers.set("X-CSRF-Token", csrf);
+    }
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
     ...init,
+    headers,
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
   return res.json() as Promise<T>;

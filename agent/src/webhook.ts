@@ -110,6 +110,8 @@ async function handleIssueComment(
     return;
   }
 
+  const reg = await state.getWebhookByRepoId(`${owner}/${repo}`);
+
   const jobId = `${owner}/${repo}#${issueNumber}`;
   const now = new Date().toISOString();
   const jobState: JobState = {
@@ -121,6 +123,7 @@ async function handleIssueComment(
     branch: `grog/issue-${issueNumber}`,
     issueTitle: payload.issue.title,
     triggerCommentId: payload.comment.id,
+    userId: reg?.userId,
     startedAt: now,
     updatedAt: now,
   };
@@ -198,6 +201,8 @@ async function handleIssuesEvent(
 
   log.info(`Auto-solving new issue ${owner}/${repo}#${payload.issue.number}`);
 
+  const reg = await state.getWebhookByRepoId(`${owner}/${repo}`);
+
   const jobId = `${owner}/${repo}#${payload.issue.number}`;
   const now = new Date().toISOString();
   const jobState: JobState = {
@@ -209,6 +214,7 @@ async function handleIssuesEvent(
     branch: `grog/issue-${payload.issue.number}`,
     issueTitle: payload.issue.title,
     triggerCommentId: 0,
+    userId: reg?.userId,
     startedAt: now,
     updatedAt: now,
   };

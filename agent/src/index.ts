@@ -11,6 +11,7 @@ import {
   getBuffer,
   subscribe,
   pushLine,
+  postComment,
   getInstallationToken,
   clearTokenCache,
   getAppInfo,
@@ -657,6 +658,22 @@ async function main() {
 
       running++;
       log.info(`Claimed job ${job.id} (running: ${running}/${config.maxConcurrentJobs})`);
+
+      // Pre-job credit check
+      if (config.billingEnabled && job.userId) {
+        const balance = await state.getCreditBalance(job.userId);
+        if (!balance || balance.credits <= 0) {
+          const now = new Date().toISOString();
+          await state.upsertJob({ ...job, status: "failed", failureReason: "Insufficient credits", updatedAt: now });
+          await postComment(
+            job.owner, job.repo, job.issueNumber,
+            "This job cannot run because you have no credits remaining. Please purchase credits to continue.",
+            config
+          );
+          running--;
+          return;
+        }
+      }
 
       // Build the QueuedJob from the claimed JobState
       const queuedJob = await buildQueuedJob(job, config, state);

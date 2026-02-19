@@ -80,9 +80,14 @@
   font-weight: 600;
   text-decoration: none;
   font-family: var(--font-mono);
-  cursor: default;
+  cursor: pointer;
   position: relative;
   transition: border-color 0.3s;
+}
+
+.loginBtn:hover {
+  border-color: var(--cyan);
+  color: var(--text-primary);
 }
 
 .comingSoon {
