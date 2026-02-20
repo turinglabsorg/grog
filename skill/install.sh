@@ -194,15 +194,27 @@ The tool automatically downloads any image attachments to `/tmp/grog-attachments
 
 If the output shows "IMAGE ATTACHMENTS" with file paths, you MUST use the Read tool to view each image file. These screenshots/mockups are critical for understanding the issue. Do this immediately after running grog, before doing anything else.
 
+## IMPORTANT: Repository Detection (Do NOT clone from scratch)
+
+Before doing anything, check if you are already inside the correct repository:
+
+1. Parse the `owner/repo` from the issue URL (e.g., `https://github.com/acme/widgets/issues/42` → `acme/widgets`)
+2. Run `git remote -v` in the current working directory
+3. If the remote URL contains the same `owner/repo` — **you are already in the right place**. Do NOT clone, do NOT pull, do NOT checkout a fresh branch unless the issue specifically requires it. Just work directly on the codebase as-is.
+4. Only if the current directory is NOT the matching repo, inform the user and ask how to proceed (they may want to navigate to the right folder).
+
+**Never** blindly run `git clone` or `git pull` when you're already in the target repo. The working directory likely has in-progress work, and pulling or resetting would destroy it. Trust the local state.
+
 ## What to do with the output
 
 1. Run grog solve to fetch the issue
 2. If image paths are shown, use Read tool on EACH image file to view them
-3. Briefly summarize the issue (title, state, key labels) including what the images show
-4. Analyze the codebase to understand how to implement the requested feature or fix
-5. Create a concrete implementation plan with specific files to modify/create
-6. Start implementing the solution immediately - don't ask for permission, just do it
-7. If you need to make architectural decisions, pick the simplest approach that fits the existing codebase patterns
+3. Check repository context (see "Repository Detection" above)
+4. Briefly summarize the issue (title, state, key labels) including what the images show
+5. Analyze the codebase to understand how to implement the requested feature or fix
+6. Create a concrete implementation plan with specific files to modify/create
+7. Start implementing the solution immediately - don't ask for permission, just do it
+8. If you need to make architectural decisions, pick the simplest approach that fits the existing codebase patterns
 
 Be proactive: your goal is to solve the issue, not just report on it.
 
@@ -274,17 +286,29 @@ node ~/.claude/tools/grog/index.js explore https://github.com/owner/repo
 - **User Project**: `https://github.com/users/username/projects/123`
 - **Repository**: `https://github.com/owner/repo`
 
+## IMPORTANT: Repository Detection (Do NOT clone from scratch)
+
+Before processing any issue, check if you are already inside the correct repository:
+
+1. Parse the `owner/repo` from the URL (e.g., `https://github.com/acme/widgets` → `acme/widgets`)
+2. Run `git remote -v` in the current working directory
+3. If the remote URL contains the same `owner/repo` — **you are already in the right place**. Do NOT clone, do NOT pull, do NOT checkout a fresh branch unless specifically needed. Just work directly on the codebase as-is.
+4. Only if the current directory is NOT the matching repo, inform the user and ask how to proceed.
+
+**Never** blindly run `git clone` or `git pull`. The working directory likely has in-progress work.
+
 ## Workflow
 
 1. Run grog explore to fetch all issues
-2. For Projects: issues are grouped by status (Todo, In Progress, Done, etc.)
-3. For Repos: issues are grouped by labels
-4. Ask the user which issues they want to work on:
+2. Check repository context (see "Repository Detection" above)
+3. For Projects: issues are grouped by status (Todo, In Progress, Done, etc.)
+4. For Repos: issues are grouped by labels
+5. Ask the user which issues they want to work on:
    - A status name (e.g., "Todo", "In Progress") for projects
    - A label name (e.g., "bug", "enhancement") for repos
    - Specific issue references (e.g., "#123, #456")
    - "all" to work on all issues
-5. Once the user selects, process each issue one by one:
+6. Once the user selects, process each issue one by one:
    - Use `/grog-solve <issue-url>` to fetch the full issue details
    - Implement the solution
    - Commit the changes with a descriptive message
@@ -353,6 +377,15 @@ The tool fetches the PR metadata, full diff, file list, existing reviews, inline
 ## IMPORTANT: Analyze Image Attachments
 
 If the output shows "IMAGE ATTACHMENTS" with file paths, you MUST use the Read tool to view each image file. These screenshots/mockups may be critical for understanding the PR's visual changes. Do this before starting the review.
+
+## IMPORTANT: Repository Detection (Do NOT clone from scratch)
+
+Before reviewing, check if you are already inside the correct repository:
+
+1. Parse the `owner/repo` from the PR URL (e.g., `https://github.com/acme/widgets/pull/42` → `acme/widgets`)
+2. Run `git remote -v` in the current working directory
+3. If the remote URL contains the same `owner/repo` — **you are already in the right place**. Do NOT clone or pull. The PR diff is already fetched by grog, so you can review without touching the local git state.
+4. Only if you need to inspect code beyond the diff, use the local files directly — do NOT clone a fresh copy.
 
 ## What to do with the output
 
