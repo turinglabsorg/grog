@@ -4,23 +4,37 @@ import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync } from "fs";
+import { homedir } from "os";
 
-// Load .env from the package directory
+// Load config from ~/.grog/config.json (primary) with .env fallback
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 config({ path: join(__dirname, ".env") });
 
-const GH_TOKEN = process.env.GH_TOKEN;
+const GROG_CONFIG_PATH = join(homedir(), ".grog", "config.json");
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+function loadGrogConfig() {
+  try {
+    return JSON.parse(readFileSync(GROG_CONFIG_PATH, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+const grogConfig = loadGrogConfig();
+
+// Config precedence: ~/.grog/config.json > .env > process.env
+const GH_TOKEN = grogConfig.ghToken || process.env.GH_TOKEN;
+const TELEGRAM_BOT_TOKEN = grogConfig.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = grogConfig.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_STATE_FILE = "/tmp/grog-telegram-state.json";
 
 if (
   !GH_TOKEN &&
-  !["talk", "telegram-send", "telegram-recv", undefined].includes(process.argv[2])
+  !["talk", "telegram-send", "telegram-recv", "notify", undefined].includes(process.argv[2])
 ) {
-  console.error("! error: GH_TOKEN not found in .env file");
+  console.error("! error: GH_TOKEN not found");
+  console.error("  add it to ~/.grog/config.json or ~/.claude/tools/grog/.env");
   process.exit(1);
 }
 
@@ -1282,6 +1296,49 @@ async function handleTelegramSend(args) {
 }
 
 /**
+ * Notify via Telegram — fire-and-forget, no talk session needed.
+ * Uses TELEGRAM_CHAT_ID from .env directly. Initializes state file so
+ * telegram-recv can work afterwards without running 'talk' first.
+ */
+async function handleNotify(args) {
+  const chatId = TELEGRAM_CHAT_ID;
+
+  if (!chatId) {
+    console.error("! error: TELEGRAM_CHAT_ID not set in .env");
+    console.error("  add it to ~/.claude/tools/grog/.env or run the installer");
+    process.exit(1);
+  }
+
+  const message = args.join(" ");
+  if (!message) {
+    console.error("! error: empty message");
+    process.exit(1);
+  }
+
+  // Initialize state file if it doesn't exist so telegram-recv works after
+  const state = loadTelegramState();
+  if (!state.chatId) {
+    // Flush pending updates and set offset
+    const flush = await telegramApi("getUpdates", { timeout: 0 });
+    const offset = flush.length > 0
+      ? Math.max(...flush.map((u) => u.update_id)) + 1
+      : 0;
+    saveTelegramState({ offset, chatId });
+  }
+
+  // Send the message
+  const chunks = [];
+  for (let i = 0; i < message.length; i += 4000) {
+    chunks.push(message.substring(i, i + 4000));
+  }
+  for (const chunk of chunks) {
+    await telegramApi("sendMessage", { chat_id: chatId, text: chunk });
+  }
+
+  console.log("> notified via Telegram");
+}
+
+/**
  * Wait for a message from Telegram — long-polls for ~90 seconds
  */
 async function handleTelegramRecv() {
@@ -1340,6 +1397,7 @@ async function main() {
     console.log("    grog review <pr-url>         fetch PR details for code review");
     console.log("    grog answer <issue-url> <file>  post a summary comment to an issue");
     console.log("    grog talk                       connect to Telegram for remote interaction");
+    console.log("    grog notify <message>           send a quick Telegram notification (no talk session needed)");
     console.log("");
     console.log("  examples:");
     console.log("    grog solve https://github.com/owner/repo/issues/123");
@@ -1409,6 +1467,17 @@ async function main() {
     case "telegram-recv":
       await handleTelegramRecv();
       break;
+
+    case "notify": {
+      const notifyArgs = process.argv.slice(3);
+      if (notifyArgs.length === 0) {
+        console.error("! error: missing message");
+        console.log("  usage: grog notify <message>");
+        process.exit(1);
+      }
+      await handleNotify(notifyArgs);
+      break;
+    }
 
     default:
       // Backwards compatibility: if the argument looks like a URL, auto-detect command

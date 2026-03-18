@@ -26,7 +26,7 @@ grog/
   agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
   api/      - SaaS API server (OAuth, billing, Stripe)
   app/      - SaaS frontend (React)
-  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
+  skill/    - Claude Code CLI skills + on-stuck hook (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
   pm2/      - PM2 ecosystem config for production
 ```
 
@@ -196,6 +196,12 @@ Install Claude Code skills for local issue solving:
 cd skill && ./install.sh
 ```
 
+The installer:
+- Copies the grog tool to `~/.claude/tools/grog/`
+- Saves your GitHub token and Telegram config to `~/.grog/config.json`
+- Registers the **on-stuck hook** in `~/.claude/settings.json`
+- Updates `~/.claude/CLAUDE.md` with autonomous assistance directives
+
 Then in any Claude Code session:
 
 ```
@@ -206,6 +212,18 @@ Then in any Claude Code session:
 /grog-talk
 ```
 
+### On-Stuck Hook (Telegram Notifications)
+
+A `PreToolUse` hook intercepts `AskUserQuestion` — when Claude gets stuck and needs your input, the question is automatically sent to Telegram. The hook waits for your reply (~90s) and returns it directly to Claude. Fully bidirectional — Claude never stops working.
+
+```
+Claude gets stuck → Hook sends question to Telegram (with folder context)
+                  → You reply on your phone
+                  → Hook returns your answer → Claude continues
+```
+
+Requires `telegramBotToken` and `telegramChatId` in `~/.grog/config.json`. If Telegram is not configured, `AskUserQuestion` works normally in the terminal.
+
 ### Telegram Bridge
 
 `/grog-talk` opens a bidirectional bridge between your Claude Code session and Telegram. You can walk away from the terminal and keep interacting through your phone — every message you send on Telegram is processed as if you typed it in the terminal.
@@ -214,6 +232,20 @@ Setup:
 1. Create a bot at [@BotFather](https://t.me/BotFather)
 2. Run the installer — it asks for the bot token (optional step)
 3. Type `/grog-talk` in Claude Code and message your bot to connect
+
+### Configuration
+
+All credentials are stored in `~/.grog/config.json`:
+
+```json
+{
+  "ghToken": "ghp_...",
+  "telegramBotToken": "123456:ABC...",
+  "telegramChatId": "12345678"
+}
+```
+
+Legacy `.env` files in `~/.claude/tools/grog/.env` are still supported as a fallback.
 
 ## License
 

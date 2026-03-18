@@ -2,6 +2,7 @@
 
 # GROG Installer
 # Installs grog to ~/.claude/tools/grog and creates the Claude Code skills
+# Config stored at ~/.grog/config.json
 
 set -e
 
@@ -30,8 +31,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Target directories
 TOOLS_DIR="$HOME/.claude/tools/grog"
 SKILLS_DIR="$HOME/.claude/skills"
+GROG_CONFIG_DIR="$HOME/.grog"
+GROG_CONFIG="$GROG_CONFIG_DIR/config.json"
 
-# Helper: set a key=value in the .env file without clobbering other entries
+# Helper: set a key in ~/.grog/config.json using jq
+set_config_val() {
+  local key="$1" val="$2"
+  if [ ! -f "$GROG_CONFIG" ]; then
+    echo '{}' > "$GROG_CONFIG"
+  fi
+  local tmp
+  tmp=$(jq --arg k "$key" --arg v "$val" '.[$k] = $v' "$GROG_CONFIG")
+  echo "$tmp" > "$GROG_CONFIG"
+  chmod 600 "$GROG_CONFIG"
+}
+
+get_config_val() {
+  local key="$1"
+  jq -r --arg k "$key" '.[$k] // empty' "$GROG_CONFIG" 2>/dev/null
+}
+
+# Legacy .env helper (kept for backward compat during migration)
 set_env_var() {
   local key="$1" val="$2" file="$TOOLS_DIR/.env"
   touch "$file"
@@ -46,8 +66,9 @@ set_env_var() {
   chmod 600 "$file"
 }
 
-echo -e "${BOLD}[1/6]${NC} creating directories..."
+echo -e "${BOLD}[1/8]${NC} creating directories..."
 mkdir -p "$TOOLS_DIR"
+mkdir -p "$GROG_CONFIG_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
 mkdir -p "$SKILLS_DIR/grog-explore"
 mkdir -p "$SKILLS_DIR/grog-review"
@@ -56,22 +77,44 @@ mkdir -p "$SKILLS_DIR/grog-talk"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo "  > $TOOLS_DIR"
+echo "  > $GROG_CONFIG_DIR"
 echo "  > skill directories"
 
 echo ""
-echo -e "${BOLD}[2/6]${NC} copying files..."
+echo -e "${BOLD}[2/8]${NC} copying files..."
 cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
-echo "  > index.js and package.json"
+# Copy hook script
+mkdir -p "$TOOLS_DIR/hooks"
+cp "$SCRIPT_DIR/hooks/on-stuck.sh" "$TOOLS_DIR/hooks/"
+chmod +x "$TOOLS_DIR/hooks/on-stuck.sh"
+echo "  > index.js, package.json, hooks/on-stuck.sh"
 
 echo ""
-echo -e "${BOLD}[3/6]${NC} installing dependencies..."
+echo -e "${BOLD}[3/8]${NC} installing dependencies..."
 cd "$TOOLS_DIR"
 npm install --silent
 echo "  > dependencies installed"
 
+# Migrate existing .env values to config.json if they exist
+if [ -f "$TOOLS_DIR/.env" ]; then
+  EXISTING_GH=$(grep "^GH_TOKEN=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  EXISTING_TG_TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  EXISTING_TG_CHAT=$(grep "^TELEGRAM_CHAT_ID=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+
+  if [ -n "$EXISTING_GH" ] && [ -z "$(get_config_val ghToken)" ]; then
+    set_config_val "ghToken" "$EXISTING_GH"
+  fi
+  if [ -n "$EXISTING_TG_TOKEN" ] && [ -z "$(get_config_val telegramBotToken)" ]; then
+    set_config_val "telegramBotToken" "$EXISTING_TG_TOKEN"
+  fi
+  if [ -n "$EXISTING_TG_CHAT" ] && [ -z "$(get_config_val telegramChatId)" ]; then
+    set_config_val "telegramChatId" "$EXISTING_TG_CHAT"
+  fi
+fi
+
 echo ""
-echo -e "${BOLD}[4/6]${NC} configuring GitHub token..."
+echo -e "${BOLD}[4/8]${NC} configuring GitHub token..."
 echo ""
 echo "To fetch GitHub issues, grog needs a Personal Access Token."
 echo "You can create one at: https://github.com/settings/tokens"
@@ -79,8 +122,9 @@ echo "Required scope: repo (for private repos) or public_repo (for public only)"
 echo ""
 
 # Check if token already exists
-if [ -f "$TOOLS_DIR/.env" ] && grep -q "GH_TOKEN=" "$TOOLS_DIR/.env"; then
-    echo "  a token already exists in $TOOLS_DIR/.env"
+CURRENT_GH_TOKEN=$(get_config_val "ghToken")
+if [ -n "$CURRENT_GH_TOKEN" ]; then
+    echo "  a token already exists in $GROG_CONFIG"
     read -p "  replace it? (y/N): " REPLACE_TOKEN
     if [[ ! "$REPLACE_TOKEN" =~ ^[Yy]$ ]]; then
         echo "  > keeping existing token"
@@ -89,27 +133,30 @@ if [ -f "$TOOLS_DIR/.env" ] && grep -q "GH_TOKEN=" "$TOOLS_DIR/.env"; then
 fi
 
 if [ "$SKIP_TOKEN" != "true" ]; then
-    read -p "Enter your GitHub token (ghp_...): " GH_TOKEN
+    read -p "Enter your GitHub token (ghp_...): " GH_TOKEN_INPUT
 
-    if [ -z "$GH_TOKEN" ]; then
-        echo "  ! no token provided. add it manually to $TOOLS_DIR/.env"
-        set_env_var "GH_TOKEN" ""
+    if [ -z "$GH_TOKEN_INPUT" ]; then
+        echo "  ! no token provided. add it manually to $GROG_CONFIG"
     else
-        set_env_var "GH_TOKEN" "$GH_TOKEN"
-        echo "  > token saved to $TOOLS_DIR/.env"
+        set_config_val "ghToken" "$GH_TOKEN_INPUT"
+        # Also write to .env for backward compat
+        set_env_var "GH_TOKEN" "$GH_TOKEN_INPUT"
+        echo "  > token saved to $GROG_CONFIG"
     fi
 fi
 
 echo ""
-echo -e "${BOLD}[5/6]${NC} configuring Telegram (optional)..."
+echo -e "${BOLD}[5/8]${NC} configuring Telegram (optional)..."
 echo ""
 echo "  grog talk lets you interact with Claude Code remotely via Telegram."
+echo "  the on-stuck hook will also notify you via Telegram when Claude needs help."
 echo "  to set it up, create a bot at https://t.me/BotFather"
 echo ""
 
 SKIP_TG=false
 
-if [ -f "$TOOLS_DIR/.env" ] && grep -q "^TELEGRAM_BOT_TOKEN=" "$TOOLS_DIR/.env"; then
+CURRENT_TG_TOKEN=$(get_config_val "telegramBotToken")
+if [ -n "$CURRENT_TG_TOKEN" ]; then
     echo "  a Telegram bot token already exists"
     read -p "  replace it? (y/N): " REPLACE_TG
     if [[ ! "$REPLACE_TG" =~ ^[Yy]$ ]]; then
@@ -122,21 +169,101 @@ if [ "$SKIP_TG" != "true" ]; then
     read -p "  enter your Telegram bot token (or press Enter to skip): " TG_BOT_TOKEN
 
     if [ -n "$TG_BOT_TOKEN" ]; then
+        set_config_val "telegramBotToken" "$TG_BOT_TOKEN"
         set_env_var "TELEGRAM_BOT_TOKEN" "$TG_BOT_TOKEN"
         echo ""
         echo "  chat ID is optional — grog talk can auto-detect it when you first connect."
         read -p "  enter your Telegram chat ID (or press Enter to auto-detect later): " TG_CHAT_ID
         if [ -n "$TG_CHAT_ID" ]; then
+            set_config_val "telegramChatId" "$TG_CHAT_ID"
             set_env_var "TELEGRAM_CHAT_ID" "$TG_CHAT_ID"
         fi
-        echo "  > Telegram config saved"
+        echo "  > Telegram config saved to $GROG_CONFIG"
     else
-        echo "  > skipped. add TELEGRAM_BOT_TOKEN to $TOOLS_DIR/.env later to enable."
+        echo "  > skipped. add telegramBotToken to $GROG_CONFIG later to enable."
     fi
 fi
 
 echo ""
-echo -e "${BOLD}[6/6]${NC} creating Claude Code skills..."
+echo -e "${BOLD}[6/8]${NC} registering on-stuck hook..."
+
+# Register the PreToolUse hook for AskUserQuestion in settings.json
+SETTINGS_FILE="$HOME/.claude/settings.json"
+
+if [ -f "$SETTINGS_FILE" ]; then
+  # Check if hook already registered
+  if jq -e '.hooks.PreToolUse[]? | select(.matcher == "AskUserQuestion")' "$SETTINGS_FILE" >/dev/null 2>&1; then
+    echo "  > on-stuck hook already registered"
+  else
+    # Add the PreToolUse hook
+    UPDATED=$(jq '
+      .hooks.PreToolUse = (.hooks.PreToolUse // []) + [{
+        "matcher": "AskUserQuestion",
+        "hooks": [{
+          "type": "command",
+          "command": "bash ~/.claude/tools/grog/hooks/on-stuck.sh"
+        }]
+      }]
+    ' "$SETTINGS_FILE")
+    echo "$UPDATED" > "$SETTINGS_FILE"
+    echo "  > hook registered in $SETTINGS_FILE"
+  fi
+else
+  # Create settings.json with the hook
+  cat > "$SETTINGS_FILE" << 'SETTINGS_EOF'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/tools/grog/hooks/on-stuck.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+SETTINGS_EOF
+  echo "  > created $SETTINGS_FILE with on-stuck hook"
+fi
+
+echo ""
+echo -e "${BOLD}[7/8]${NC} updating global CLAUDE.md..."
+
+CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+
+# Check if Grog section already exists
+if grep -q "# Grog — Autonomous Assistance" "$CLAUDE_MD" 2>/dev/null; then
+  # Remove existing Grog section and replace
+  # Use sed to delete from "# Grog" to next "# " heading or end of file
+  TEMP_MD=$(mktemp)
+  awk '/^# Grog — Autonomous Assistance/{skip=1; next} /^# [^G]/{skip=0} !skip' "$CLAUDE_MD" > "$TEMP_MD"
+  mv "$TEMP_MD" "$CLAUDE_MD"
+fi
+
+# Append the Grog section
+cat >> "$CLAUDE_MD" << 'CLAUDE_EOF'
+
+# Grog — Autonomous Assistance
+
+When you get stuck, need clarification, or encounter a blocker — do NOT stop and wait. A hook intercepts your questions and routes them to Telegram. Follow this protocol:
+
+1. When your `AskUserQuestion` is blocked by the hook, it means your question was sent to Telegram.
+2. Wait for the response: `node ~/.claude/tools/grog/index.js telegram-recv`
+3. If `[no message]` is returned, retry `telegram-recv` up to 5 times (each waits ~90s).
+4. Use the Telegram response to continue your work.
+5. If no response after 5 attempts (~7.5 min), state the blocker clearly in the terminal and stop.
+
+Config location: `~/.grog/config.json` (ghToken, telegramBotToken, telegramChatId)
+CLAUDE_EOF
+
+echo "  > Grog section added to $CLAUDE_MD"
+
+echo ""
+echo -e "${BOLD}[8/8]${NC} creating Claude Code skills..."
 
 # Skill 1: /grog-solve - Fetch and solve a single issue
 cat > "$SKILLS_DIR/grog-solve/SKILL.md" << 'EOF'
@@ -221,7 +348,7 @@ Be proactive: your goal is to solve the issue, not just report on it.
 ## Error Handling
 
 - If no URL is provided, ask the user for the GitHub issue URL
-- If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
+- If the token is missing, inform the user to run the install script again or manually add ghToken to `~/.grog/config.json`
 EOF
 
 echo "  > /grog-solve skill"
@@ -317,7 +444,7 @@ Before processing any issue, check if you are already inside the correct reposit
 ## Error Handling
 
 - If no URL is provided, ask the user for the GitHub project or repository URL
-- If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
+- If the token is missing, inform the user to run the install script again or manually add ghToken to `~/.grog/config.json`
 EOF
 
 echo "  > /grog-explore skill"
@@ -412,7 +539,7 @@ Be constructive and specific. Reference line numbers and file paths. Suggest con
 ## Error Handling
 
 - If no URL is provided, ask the user for the GitHub PR URL
-- If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
+- If the token is missing, inform the user to run the install script again or manually add ghToken to `~/.grog/config.json`
 EOF
 
 echo "  > /grog-review skill"
@@ -491,7 +618,7 @@ Keep it concise but informative.
 
 - If no URL is provided, ask the user for the GitHub issue or PR URL
 - Both issue URLs (`/issues/123`) and PR URLs (`/pull/123`) are supported
-- If the token is missing, inform the user to run the install script again or manually add GH_TOKEN to `~/.claude/tools/grog/.env`
+- If the token is missing, inform the user to run the install script again or manually add ghToken to `~/.grog/config.json`
 EOF
 
 echo "  > /grog-answer skill"
@@ -585,7 +712,7 @@ This blocks for up to ~90 seconds waiting for a Telegram message.
 
 ## Error Handling
 
-- If the Telegram bot token is missing, tell the user to run the installer or add TELEGRAM_BOT_TOKEN to `~/.claude/tools/grog/.env`
+- If the Telegram bot token is missing, tell the user to run the installer or add telegramBotToken to `~/.grog/config.json`
 - If connection fails, report the error and stop the loop
 EOF
 
@@ -604,6 +731,9 @@ echo "    /grog-review <pr-url>       review a pull request"
 echo "    /grog-answer <url>          post a summary comment to an issue or PR"
 echo "    /grog-talk                  connect to Telegram for remote interaction"
 echo ""
+echo "  on-stuck hook: when Claude calls AskUserQuestion, the question"
+echo "  is automatically sent to Telegram for remote assistance."
+echo ""
 echo "  examples:"
 echo "    /grog-solve https://github.com/owner/repo/issues/123"
 echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
@@ -613,6 +743,8 @@ echo "    /grog-answer https://github.com/owner/repo/issues/123  # or /pull/123"
 echo "    /grog-talk"
 echo ""
 echo "  files:"
+echo "    config: $GROG_CONFIG"
 echo "    tool:   $TOOLS_DIR"
 echo "    skills: $SKILLS_DIR/grog-*"
+echo "    hook:   $TOOLS_DIR/hooks/on-stuck.sh"
 echo ""
