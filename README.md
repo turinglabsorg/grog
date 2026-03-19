@@ -26,7 +26,7 @@ grog/
   agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
   api/      - SaaS API server (OAuth, billing, Stripe)
   app/      - SaaS frontend (React)
-  skill/    - Claude Code CLI skills + on-stuck hook (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
+  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
   pm2/      - PM2 ecosystem config for production
 ```
 
@@ -196,12 +196,6 @@ Install Claude Code skills for local issue solving:
 cd skill && ./install.sh
 ```
 
-The installer:
-- Copies the grog tool to `~/.claude/tools/grog/`
-- Saves your GitHub token and Telegram config to `~/.grog/config.json`
-- Registers the **on-stuck hook** in `~/.claude/settings.json`
-- Updates `~/.claude/CLAUDE.md` with autonomous assistance directives
-
 Then in any Claude Code session:
 
 ```
@@ -211,22 +205,6 @@ Then in any Claude Code session:
 /grog-answer https://github.com/owner/repo/issues/123  # or /pull/123
 /grog-talk
 ```
-
-### On-Stuck Hook (Bidirectional)
-
-When Claude gets stuck and calls `AskUserQuestion`, the question is sent to Telegram with folder context. The hook waits ~90s for your reply and returns it directly to Claude. Fully bidirectional — Claude never stops working, even when you're away from the terminal.
-
-```
-Claude gets stuck → Hook sends question to Telegram (with folder context)
-                  → You reply on your phone
-                  → Hook returns your answer → Claude continues
-```
-
-### On-Approve Hook (Notifications)
-
-A second hook sends fire-and-forget Telegram notifications whenever Claude uses tools (Bash, Edit, Write, etc.). This hook never blocks — the terminal approval prompt still works normally. You get a live feed of what Claude is doing on your phone.
-
-Both hooks require `telegramBotToken` and `telegramChatId` in `~/.grog/config.json`. If not configured, everything works normally in the terminal.
 
 ### Telegram Bridge
 

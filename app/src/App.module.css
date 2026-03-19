@@ -413,19 +413,13 @@
 
 .capGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
 @media (max-width: 640px) {
   .capGrid {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (min-width: 641px) and (max-width: 900px) {
-  .capGrid {
-    grid-template-columns: 1fr 1fr;
   }
 }
 

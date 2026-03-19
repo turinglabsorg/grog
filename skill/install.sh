@@ -66,7 +66,7 @@ set_env_var() {
   chmod 600 "$file"
 }
 
-echo -e "${BOLD}[1/8]${NC} creating directories..."
+echo -e "${BOLD}[1/6]${NC} creating directories..."
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$GROG_CONFIG_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
@@ -81,17 +81,13 @@ echo "  > $GROG_CONFIG_DIR"
 echo "  > skill directories"
 
 echo ""
-echo -e "${BOLD}[2/8]${NC} copying files..."
+echo -e "${BOLD}[2/6]${NC} copying files..."
 cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
-# Copy hook script
-mkdir -p "$TOOLS_DIR/hooks"
-cp "$SCRIPT_DIR/hooks/on-stuck.sh" "$TOOLS_DIR/hooks/"
-chmod +x "$TOOLS_DIR/hooks/on-stuck.sh"
-echo "  > index.js, package.json, hooks/on-stuck.sh"
+echo "  > index.js and package.json"
 
 echo ""
-echo -e "${BOLD}[3/8]${NC} installing dependencies..."
+echo -e "${BOLD}[3/6]${NC} installing dependencies..."
 cd "$TOOLS_DIR"
 npm install --silent
 echo "  > dependencies installed"
@@ -114,7 +110,7 @@ if [ -f "$TOOLS_DIR/.env" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[4/8]${NC} configuring GitHub token..."
+echo -e "${BOLD}[4/6]${NC} configuring GitHub token..."
 echo ""
 echo "To fetch GitHub issues, grog needs a Personal Access Token."
 echo "You can create one at: https://github.com/settings/tokens"
@@ -146,10 +142,10 @@ if [ "$SKIP_TOKEN" != "true" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[5/8]${NC} configuring Telegram (optional)..."
+echo -e "${BOLD}[5/6]${NC} configuring Telegram (optional)..."
 echo ""
 echo "  grog talk lets you interact with Claude Code remotely via Telegram."
-echo "  the on-stuck hook will also notify you via Telegram when Claude needs help."
+echo "  /grog-talk lets you interact with Claude Code remotely via Telegram."
 echo "  to set it up, create a bot at https://t.me/BotFather"
 echo ""
 
@@ -185,85 +181,7 @@ if [ "$SKIP_TG" != "true" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[6/8]${NC} registering on-stuck hook..."
-
-# Register the PreToolUse hook for AskUserQuestion in settings.json
-SETTINGS_FILE="$HOME/.claude/settings.json"
-
-if [ -f "$SETTINGS_FILE" ]; then
-  # Check if hook already registered
-  if jq -e '.hooks.PreToolUse[]? | select(.matcher == "AskUserQuestion")' "$SETTINGS_FILE" >/dev/null 2>&1; then
-    echo "  > on-stuck hook already registered"
-  else
-    # Add the PreToolUse hook
-    UPDATED=$(jq '
-      .hooks.PreToolUse = (.hooks.PreToolUse // []) + [{
-        "matcher": "AskUserQuestion",
-        "hooks": [{
-          "type": "command",
-          "command": "bash ~/.claude/tools/grog/hooks/on-stuck.sh"
-        }]
-      }]
-    ' "$SETTINGS_FILE")
-    echo "$UPDATED" > "$SETTINGS_FILE"
-    echo "  > hook registered in $SETTINGS_FILE"
-  fi
-else
-  # Create settings.json with the hook
-  cat > "$SETTINGS_FILE" << 'SETTINGS_EOF'
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/tools/grog/hooks/on-stuck.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-SETTINGS_EOF
-  echo "  > created $SETTINGS_FILE with on-stuck hook"
-fi
-
-echo ""
-echo -e "${BOLD}[7/8]${NC} updating global CLAUDE.md..."
-
-CLAUDE_MD="$HOME/.claude/CLAUDE.md"
-
-# Check if Grog section already exists
-if grep -q "# Grog — Autonomous Assistance" "$CLAUDE_MD" 2>/dev/null; then
-  # Remove existing Grog section and replace
-  # Use sed to delete from "# Grog" to next "# " heading or end of file
-  TEMP_MD=$(mktemp)
-  awk '/^# Grog — Autonomous Assistance/{skip=1; next} /^# [^G]/{skip=0} !skip' "$CLAUDE_MD" > "$TEMP_MD"
-  mv "$TEMP_MD" "$CLAUDE_MD"
-fi
-
-# Append the Grog section
-cat >> "$CLAUDE_MD" << 'CLAUDE_EOF'
-
-# Grog — Autonomous Assistance
-
-When you get stuck, need clarification, or encounter a blocker — do NOT stop and wait. A hook intercepts your questions and routes them to Telegram. Follow this protocol:
-
-1. When your `AskUserQuestion` is blocked by the hook, it means your question was sent to Telegram.
-2. Wait for the response: `node ~/.claude/tools/grog/index.js telegram-recv`
-3. If `[no message]` is returned, retry `telegram-recv` up to 5 times (each waits ~90s).
-4. Use the Telegram response to continue your work.
-5. If no response after 5 attempts (~7.5 min), state the blocker clearly in the terminal and stop.
-
-Config location: `~/.grog/config.json` (ghToken, telegramBotToken, telegramChatId)
-CLAUDE_EOF
-
-echo "  > Grog section added to $CLAUDE_MD"
-
-echo ""
-echo -e "${BOLD}[8/8]${NC} creating Claude Code skills..."
+echo -e "${BOLD}[6/6]${NC} creating Claude Code skills..."
 
 # Skill 1: /grog-solve - Fetch and solve a single issue
 cat > "$SKILLS_DIR/grog-solve/SKILL.md" << 'EOF'
@@ -731,9 +649,6 @@ echo "    /grog-review <pr-url>       review a pull request"
 echo "    /grog-answer <url>          post a summary comment to an issue or PR"
 echo "    /grog-talk                  connect to Telegram for remote interaction"
 echo ""
-echo "  on-stuck hook: when Claude calls AskUserQuestion, the question"
-echo "  is automatically sent to Telegram for remote assistance."
-echo ""
 echo "  examples:"
 echo "    /grog-solve https://github.com/owner/repo/issues/123"
 echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
@@ -746,5 +661,4 @@ echo "  files:"
 echo "    config: $GROG_CONFIG"
 echo "    tool:   $TOOLS_DIR"
 echo "    skills: $SKILLS_DIR/grog-*"
-echo "    hook:   $TOOLS_DIR/hooks/on-stuck.sh"
 echo ""

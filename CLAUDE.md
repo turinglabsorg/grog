@@ -6,10 +6,8 @@ Autonomous GitHub workflow tool and Telegram bridge for Claude Code.
 
 ```
 ~/.grog/config.json          Central config (ghToken, telegramBotToken, telegramChatId)
-~/.claude/tools/grog/        Runtime (index.js, node_modules, hooks/)
+~/.claude/tools/grog/        Runtime (index.js, node_modules)
 ~/.claude/skills/grog-*/     Skill definitions (SKILL.md files)
-~/.claude/settings.json      Hook registration (PreToolUse → on-stuck)
-~/.claude/CLAUDE.md          Global directives (Grog autonomous protocol)
 ```
 
 ## Config
@@ -36,23 +34,6 @@ Fallback: `~/.claude/tools/grog/.env` (legacy, kept for backward compat).
 | `/grog-answer <url>` | Post a summary comment to issue/PR |
 | `/grog-talk` | Bidirectional Telegram bridge |
 
-## On-Stuck Hook
-
-A `PreToolUse` hook intercepts `AskUserQuestion` calls:
-
-1. Claude gets stuck and tries to ask a question
-2. Hook (`~/.claude/tools/grog/hooks/on-stuck.sh`) intercepts it
-3. Question is sent to Telegram via `grog notify` (includes folder name + full path)
-4. Hook calls `telegram-recv` and waits ~90s for the user's reply
-5. If reply arrives: hook returns it in the `reason` field → Claude continues with the answer
-6. If no reply: hook tells Claude to make its best judgment and keep working
-
-Fully bidirectional — Claude never stops, never needs to manually call `telegram-recv`.
-
-A second hook (`on-approve.sh`) fires for all tool uses (Bash, Edit, Write, etc.) and sends a fire-and-forget notification with tool details. This hook never blocks — the terminal approval prompt still works normally.
-
-**Requirement:** `telegramBotToken` and `telegramChatId` must be set in `~/.grog/config.json`. If not configured, both hooks pass through silently and everything works normally.
-
 ## CLI Commands (index.js)
 
 ```
@@ -66,13 +47,6 @@ grog telegram-send <msg-or-file>  Send message to TG (needs talk or chat ID)
 grog telegram-recv                Long-poll for TG message (~90s)
 ```
 
-## Global CLAUDE.md Directives
-
-The global `~/.claude/CLAUDE.md` includes a "Grog — Autonomous Assistance" section that instructs every Claude Code session to:
-- Use Grog skills for all GitHub workflows
-- Follow the Telegram response protocol when `AskUserQuestion` is blocked
-- Retry `telegram-recv` up to 5 times before giving up
-
 ## Development
 
 ```bash
@@ -80,15 +54,13 @@ The global `~/.claude/CLAUDE.md` includes a "Grog — Autonomous Assistance" sec
 cd skill/
 node index.js solve https://github.com/owner/repo/issues/1
 
-# Install/reinstall skills + hooks
+# Install/reinstall skills
 bash skill/install.sh
 
 # Project structure
 skill/
   index.js          All CLI commands (solve, explore, review, answer, talk, notify, telegram-*)
-  install.sh        Installer (copies files, sets up config, registers hooks, updates CLAUDE.md)
-  hooks/
-    on-stuck.sh     PreToolUse hook for AskUserQuestion → Telegram notification
+  install.sh        Installer (copies files, sets up config)
   package.json      Dependencies (dotenv)
 
 agent/              Self-hosted agent server (webhook, runner, dashboard)

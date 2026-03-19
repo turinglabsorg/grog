@@ -205,20 +205,6 @@ export function App() {
               <div className={styles.capSmallDesc}>Enable auto-solve on a repo and every new issue gets picked up automatically &mdash; no mention needed.</div>
             </div>
           </div>
-          <div className={styles.capSmall}>
-            <span className={styles.capSmallIcon}>&#x1f514;</span>
-            <div>
-              <div className={styles.capSmallTitle}>On-Stuck Hook</div>
-              <div className={styles.capSmallDesc}>When Claude gets stuck, questions are sent to Telegram automatically. Reply from your phone &mdash; Claude picks up where it left off.</div>
-            </div>
-          </div>
-          <div className={styles.capSmall}>
-            <span className={styles.capSmallIcon}>&#x1f4f1;</span>
-            <div>
-              <div className={styles.capSmallTitle}>Telegram Bridge</div>
-              <div className={styles.capSmallDesc}>Bidirectional Telegram integration. Walk away from the terminal and keep working through your phone.</div>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -324,7 +310,6 @@ export function App() {
                 Personal Access Token (classic) with <span className={styles.code}>repo</span> scope.
                 The installer will ask you to paste it.
                 Your token is stored locally in <span className={styles.code}>~/.grog/config.json</span> and never leaves your machine.
-                Optionally add a Telegram bot token for the on-stuck hook and remote bridge.
               </div>
             </div>
           </div>
@@ -344,7 +329,6 @@ export function App() {
         <div className={styles.skillNote}>
           All actions &mdash; comments, reviews, pushes &mdash; appear under your GitHub account.
           Config lives in <span className={styles.code}>~/.grog/config.json</span> and never leaves your machine.
-          The installer also registers an on-stuck hook that routes questions to Telegram.
           To update, <span className={styles.code}>git pull</span> and re-run the installer.
         </div>
       </section>
