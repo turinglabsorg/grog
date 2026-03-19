@@ -212,9 +212,9 @@ Then in any Claude Code session:
 /grog-talk
 ```
 
-### On-Stuck Hook (Telegram Notifications)
+### On-Stuck Hook (Bidirectional)
 
-A `PreToolUse` hook intercepts `AskUserQuestion` — when Claude gets stuck and needs your input, the question is automatically sent to Telegram. The hook waits for your reply (~90s) and returns it directly to Claude. Fully bidirectional — Claude never stops working.
+When Claude gets stuck and calls `AskUserQuestion`, the question is sent to Telegram with folder context. The hook waits ~90s for your reply and returns it directly to Claude. Fully bidirectional — Claude never stops working, even when you're away from the terminal.
 
 ```
 Claude gets stuck → Hook sends question to Telegram (with folder context)
@@ -222,7 +222,11 @@ Claude gets stuck → Hook sends question to Telegram (with folder context)
                   → Hook returns your answer → Claude continues
 ```
 
-Requires `telegramBotToken` and `telegramChatId` in `~/.grog/config.json`. If Telegram is not configured, `AskUserQuestion` works normally in the terminal.
+### On-Approve Hook (Notifications)
+
+A second hook sends fire-and-forget Telegram notifications whenever Claude uses tools (Bash, Edit, Write, etc.). This hook never blocks — the terminal approval prompt still works normally. You get a live feed of what Claude is doing on your phone.
+
+Both hooks require `telegramBotToken` and `telegramChatId` in `~/.grog/config.json`. If not configured, everything works normally in the terminal.
 
 ### Telegram Bridge
 

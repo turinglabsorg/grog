@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Grog Hook: on-stuck (notification only)
-# Sends a Telegram notification when Claude calls AskUserQuestion.
-# Does NOT block — the terminal prompt still works normally.
+# Grog Hook: on-stuck (bidirectional)
+# Sends question to Telegram and waits for reply so Claude can continue
+# even when the user is away from the terminal.
 #
 # Hook type: PreToolUse (matcher: AskUserQuestion)
 
@@ -30,11 +30,21 @@ fi
 CWD=$(pwd)
 FOLDER=$(basename "$CWD")
 
-# Send notification in background (fire-and-forget) so we don't block the terminal
+# Send question to Telegram
 node "$GROG_TOOL" notify "🔔 Claude is stuck in [$FOLDER]
 📁 $CWD
 
-$QUESTION" >/dev/null 2>&1 &
+$QUESTION
 
-# Exit 0 = pass through, terminal prompt still works
-exit 0
+Reply here to answer." >/dev/null 2>&1
+
+# Wait for response (~90s)
+RESPONSE=$(node "$GROG_TOOL" telegram-recv 2>/dev/null)
+
+if [ "$RESPONSE" = "[no message]" ] || [ -z "$RESPONSE" ]; then
+  ESCAPED=$(echo "No response from Telegram after ~90s. State the blocker clearly in the terminal output, then make your best judgment call and continue working. Do NOT call AskUserQuestion again for the same question." | jq -Rs .)
+  echo "{\"decision\":\"block\",\"reason\":$ESCAPED}"
+else
+  ESCAPED=$(echo "Telegram response from the user: $RESPONSE" | jq -Rs .)
+  echo "{\"decision\":\"block\",\"reason\":$ESCAPED}"
+fi
