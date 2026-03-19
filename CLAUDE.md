@@ -43,13 +43,12 @@ A `PreToolUse` hook intercepts `AskUserQuestion` calls:
 1. Claude gets stuck and tries to ask a question
 2. Hook (`~/.claude/tools/grog/hooks/on-stuck.sh`) intercepts it
 3. Question is sent to Telegram via `grog notify` (includes folder name + full path)
-4. Hook calls `telegram-recv` and waits ~90s for the user's reply
-5. If reply arrives: hook returns it in the `reason` field → Claude continues with the answer
-6. If no reply: hook tells Claude to make its best judgment and keep working
+4. Hook passes through — the terminal prompt still works normally
+5. User can answer in the terminal OR on Telegram
 
-Fully bidirectional — Claude never stops, never needs to manually call `telegram-recv`.
+A second hook (`on-approve.sh`) fires for all tool uses (Bash, Edit, Write, etc.) and sends a notification with tool details. The terminal approval prompt still works normally — notifications are informational.
 
-**Requirement:** `telegramBotToken` and `telegramChatId` must be set in `~/.grog/config.json`. If not configured, the hook passes through and `AskUserQuestion` works normally.
+**Requirement:** `telegramBotToken` and `telegramChatId` must be set in `~/.grog/config.json`. If not configured, both hooks pass through silently and everything works normally.
 
 ## CLI Commands (index.js)
 

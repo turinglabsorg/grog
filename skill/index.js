@@ -1339,6 +1339,137 @@ async function handleNotify(args) {
 }
 
 /**
+ * Send a prompt with inline keyboard buttons to Telegram and wait for response.
+ * Used for tool approval (Yes/Yes Always/No) and questions (with Reply option).
+ * Returns the callback data or typed text response.
+ */
+async function handlePrompt(args) {
+  const chatId = TELEGRAM_CHAT_ID;
+
+  if (!chatId) {
+    console.error("! error: TELEGRAM_CHAT_ID not set");
+    process.exit(1);
+  }
+
+  const message = args.join(" ");
+  if (!message) {
+    console.error("! error: empty message");
+    process.exit(1);
+  }
+
+  // Initialize state file if needed
+  const state = loadTelegramState();
+  if (!state.chatId) {
+    const flush = await telegramApi("getUpdates", { timeout: 0 });
+    const offset = flush.length > 0
+      ? Math.max(...flush.map((u) => u.update_id)) + 1
+      : 0;
+    saveTelegramState({ offset, chatId });
+  }
+
+  // Send message with inline keyboard
+  await telegramApi("sendMessage", {
+    chat_id: chatId,
+    text: message,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Yes", callback_data: "yes" },
+          { text: "Yes, don't ask again", callback_data: "always" },
+          { text: "No", callback_data: "no" },
+        ],
+        [
+          { text: "Reply with text...", callback_data: "reply" },
+        ],
+      ],
+    },
+  });
+
+  // Wait for callback_query or text message response (~90s)
+  const freshState = loadTelegramState();
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const params = {
+      timeout: 45,
+      allowed_updates: ["callback_query", "message"],
+    };
+    if (freshState.offset) params.offset = freshState.offset;
+
+    const updates = await telegramApi("getUpdates", params);
+
+    // Advance offset for ALL updates
+    if (updates.length > 0) {
+      freshState.offset = Math.max(...updates.map((u) => u.update_id)) + 1;
+      saveTelegramState(freshState);
+    }
+
+    // Check for callback query (button press) from our chat
+    const callback = updates.find(
+      (u) => u.callback_query && String(u.callback_query.message?.chat?.id) === String(chatId),
+    );
+
+    if (callback) {
+      const data = callback.callback_query.data;
+
+      // Acknowledge the callback to remove the loading spinner
+      await telegramApi("answerCallbackQuery", {
+        callback_query_id: callback.callback_query.id,
+      });
+
+      if (data === "reply") {
+        // User wants to type a response — send a follow-up and wait for text
+        await telegramApi("sendMessage", {
+          chat_id: chatId,
+          text: "Type your response:",
+          reply_markup: { force_reply: true },
+        });
+
+        // Wait for the text message
+        for (let textAttempt = 0; textAttempt < 2; textAttempt++) {
+          const textParams = { timeout: 45, allowed_updates: ["message"] };
+          if (freshState.offset) textParams.offset = freshState.offset;
+
+          const textUpdates = await telegramApi("getUpdates", textParams);
+
+          if (textUpdates.length > 0) {
+            freshState.offset = Math.max(...textUpdates.map((u) => u.update_id)) + 1;
+            saveTelegramState(freshState);
+          }
+
+          const textMsg = textUpdates.find(
+            (u) => u.message && String(u.message.chat.id) === String(chatId),
+          );
+
+          if (textMsg) {
+            console.log(`reply:${textMsg.message.text || ""}`);
+            return;
+          }
+        }
+
+        console.log("[no message]");
+        return;
+      }
+
+      // Button press: yes, always, no
+      console.log(data);
+      return;
+    }
+
+    // Check for regular text message (user typed instead of pressing button)
+    const textMsg = updates.find(
+      (u) => u.message && String(u.message.chat.id) === String(chatId),
+    );
+
+    if (textMsg) {
+      console.log(`reply:${textMsg.message.text || ""}`);
+      return;
+    }
+  }
+
+  console.log("[no message]");
+}
+
+/**
  * Wait for a message from Telegram — long-polls for ~90 seconds
  */
 async function handleTelegramRecv() {
@@ -1352,14 +1483,15 @@ async function handleTelegramRecv() {
 
   // Poll with retry — up to ~90 seconds before returning [no message]
   for (let attempt = 0; attempt < 2; attempt++) {
-    const params = { timeout: 45, allowed_updates: ["message"] };
+    const params = { timeout: 45, allowed_updates: ["message", "callback_query"] };
     if (state.offset) params.offset = state.offset;
 
     const updates = await telegramApi("getUpdates", params);
 
-    // Filter for our chat only
+    // Filter for our chat only (messages and callback queries)
     const messages = updates.filter(
-      (u) => u.message && String(u.message.chat.id) === String(chatId),
+      (u) => (u.message && String(u.message.chat.id) === String(chatId)) ||
+             (u.callback_query && String(u.callback_query.message?.chat?.id) === String(chatId)),
     );
 
     // Advance offset for ALL updates (including other chats)
@@ -1370,7 +1502,13 @@ async function handleTelegramRecv() {
 
     if (messages.length > 0) {
       const texts = messages
-        .map((u) => u.message.text || "[non-text message]")
+        .map((u) => {
+          if (u.callback_query) {
+            telegramApi("answerCallbackQuery", { callback_query_id: u.callback_query.id }).catch(() => {});
+            return u.callback_query.data;
+          }
+          return u.message.text || "[non-text message]";
+        })
         .join("\n");
       console.log(texts);
       return;
@@ -1476,6 +1614,17 @@ async function main() {
         process.exit(1);
       }
       await handleNotify(notifyArgs);
+      break;
+    }
+
+    case "prompt": {
+      const promptArgs = process.argv.slice(3);
+      if (promptArgs.length === 0) {
+        console.error("! error: missing message");
+        console.log("  usage: grog prompt <message>");
+        process.exit(1);
+      }
+      await handlePrompt(promptArgs);
       break;
     }
 
