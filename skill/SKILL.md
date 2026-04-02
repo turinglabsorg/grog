@@ -142,3 +142,13 @@ Alternatively, add these to `~/.claude/tools/grog/.env` manually:
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
 TELEGRAM_CHAT_ID=your-chat-id
 ```
+
+### Sending images via Telegram
+
+To send screenshots or images directly to Telegram (useful for sharing browser screenshots):
+
+```bash
+node ~/.claude/tools/grog/index.js telegram-send-image /path/to/image.png "Optional caption"
+```
+
+This command sends images using the Telegram Bot API `sendPhoto` method, supporting any image format.

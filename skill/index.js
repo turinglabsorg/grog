@@ -1296,6 +1296,58 @@ async function handleTelegramSend(args) {
 }
 
 /**
+ * Send an image with optional caption to Telegram
+ * Usage: grog telegram-send-image <image-path> [caption]
+ */
+async function handleTelegramSendImage(args) {
+  const chatId = TELEGRAM_CHAT_ID;
+
+  if (!chatId) {
+    console.error("! error: TELEGRAM_CHAT_ID not set in .env");
+    process.exit(1);
+  }
+
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error("! error: TELEGRAM_BOT_TOKEN not set in .env");
+    process.exit(1);
+  }
+
+  const imagePath = args[0];
+  const caption = args.slice(1).join(" ");
+
+  if (!imagePath) {
+    console.error("! error: missing image path");
+    console.error("  usage: grog telegram-send-image <image-path> [caption]");
+    process.exit(1);
+  }
+
+  if (!existsSync(imagePath)) {
+    console.error(`! error: file not found: ${imagePath}`);
+    process.exit(1);
+  }
+
+  const { execSync } = await import("child_process");
+
+  const captionArg = caption ? `-F "caption=${caption}"` : "";
+
+  try {
+    const cmd = `curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" -F "chat_id=${chatId}" -F "photo=@${imagePath}" ${captionArg}`;
+    const result = execSync(cmd, { encoding: "utf-8" });
+    const data = JSON.parse(result);
+
+    if (!data.ok) {
+      console.error(`! error: Telegram API error: ${data.description}`);
+      process.exit(1);
+    }
+
+    console.log("> image sent to Telegram");
+  } catch (err) {
+    console.error(`! error: failed to send image: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+/**
  * Notify via Telegram — fire-and-forget, no talk session needed.
  * Uses TELEGRAM_CHAT_ID from .env directly. Initializes state file so
  * telegram-recv can work afterwards without running 'talk' first.
@@ -1621,10 +1673,21 @@ async function main() {
       const promptArgs = process.argv.slice(3);
       if (promptArgs.length === 0) {
         console.error("! error: missing message");
-        console.log("  usage: grog prompt <message>");
+        console.error("  usage: grog prompt <message>");
         process.exit(1);
       }
       await handlePrompt(promptArgs);
+      break;
+    }
+
+    case "telegram-send-image": {
+      const imageArgs = process.argv.slice(3);
+      if (imageArgs.length === 0) {
+        console.error("! error: missing image path");
+        console.error("  usage: grog telegram-send-image <image-path> [caption]");
+        process.exit(1);
+      }
+      await handleTelegramSendImage(imageArgs);
       break;
     }
 
