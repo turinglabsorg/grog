@@ -25,17 +25,32 @@ const grogConfig = loadGrogConfig();
 
 // Config precedence: ~/.grog/config.json > .env > process.env
 const GH_TOKEN = grogConfig.ghToken || process.env.GH_TOKEN;
+const LINEAR_API_KEY = grogConfig.linearApiKey || process.env.LINEAR_API_KEY;
 const TELEGRAM_BOT_TOKEN = grogConfig.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = grogConfig.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_STATE_FILE = "/tmp/grog-telegram-state.json";
 
-if (
-  !GH_TOKEN &&
-  !["talk", "telegram-send", "telegram-recv", "notify", undefined].includes(process.argv[2])
-) {
-  console.error("! error: GH_TOKEN not found");
-  console.error("  add it to ~/.grog/config.json or ~/.claude/tools/grog/.env");
-  process.exit(1);
+function detectPlatform(url) {
+  if (!url) return null;
+  if (url.includes("linear.app")) return "linear";
+  if (url.includes("github.com")) return "github";
+  return null;
+}
+
+function requireGhToken() {
+  if (!GH_TOKEN) {
+    console.error("! error: GH_TOKEN not found");
+    console.error("  add it to ~/.grog/config.json or ~/.claude/tools/grog/.env");
+    process.exit(1);
+  }
+}
+
+function requireLinearToken() {
+  if (!LINEAR_API_KEY) {
+    console.error("! error: LINEAR_API_KEY not found");
+    console.error("  add linearApiKey to ~/.grog/config.json or LINEAR_API_KEY to ~/.claude/tools/grog/.env");
+    process.exit(1);
+  }
 }
 
 /**
@@ -112,6 +127,359 @@ function parseGitHubUrl(url) {
 
   return null;
 }
+
+// ─────────────────────────────────────────────────────────
+// Linear URL Parsers & API
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Parse Linear issue URL
+ * @param {string} url - Linear issue URL like https://linear.app/workspace/issue/PROJ-123 or https://linear.app/workspace/issue/PROJ-123/title-slug
+ * @returns {{ workspace: string, identifier: string } | null}
+ */
+function parseLinearIssueUrl(url) {
+  const match = url.match(/linear\.app\/([^/]+)\/issue\/([A-Z]+-\d+)/);
+  if (!match) return null;
+  return { workspace: match[1], identifier: match[2] };
+}
+
+/**
+ * Parse Linear team/project URL for exploration
+ * @param {string} url - Linear URL like https://linear.app/workspace/team/PROJ/... or https://linear.app/workspace/project/...
+ * @returns {{ type: string, workspace: string, teamKey?: string, projectId?: string } | null}
+ */
+function parseLinearUrl(url) {
+  // Team view: https://linear.app/workspace/team/PROJ/active (or /backlog, /all, etc.)
+  const teamMatch = url.match(/linear\.app\/([^/]+)\/team\/([^/]+)/);
+  if (teamMatch) {
+    return { type: "team", workspace: teamMatch[1], teamKey: teamMatch[2] };
+  }
+
+  // Project: https://linear.app/workspace/project/project-slug-id
+  const projectMatch = url.match(/linear\.app\/([^/]+)\/project\/([^/]+)/);
+  if (projectMatch) {
+    return { type: "project", workspace: projectMatch[1], projectSlug: projectMatch[2] };
+  }
+
+  // Workspace root: https://linear.app/workspace
+  const workspaceMatch = url.match(/linear\.app\/([^/]+)\/?$/);
+  if (workspaceMatch) {
+    return { type: "workspace", workspace: workspaceMatch[1] };
+  }
+
+  return null;
+}
+
+/**
+ * Execute a Linear GraphQL query
+ */
+async function linearGraphQL(query, variables = {}) {
+  const response = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: LINEAR_API_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Linear API error: ${response.status} ${response.statusText}`);
+  }
+
+  const result = await response.json();
+  if (result.errors) {
+    throw new Error(`Linear GraphQL error: ${result.errors.map((e) => e.message).join(", ")}`);
+  }
+  return result.data;
+}
+
+/**
+ * Fetch a single Linear issue by identifier (e.g. "PROJ-123")
+ */
+async function fetchLinearIssue(identifier) {
+  const query = `
+    query($id: String!) {
+      issue(id: $id) {
+        id
+        identifier
+        title
+        description
+        priority
+        priorityLabel
+        state { name type color }
+        assignee { name displayName email }
+        creator { name displayName }
+        team { key name }
+        project { name }
+        labels { nodes { name color } }
+        comments { nodes { body createdAt user { name displayName } } }
+        createdAt
+        updatedAt
+        url
+        estimate
+        dueDate
+        parent { identifier title }
+        children { nodes { identifier title state { name } } }
+        relations { nodes { type relatedIssue { identifier title state { name } } } }
+        attachments { nodes { title url } }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(query, { id: identifier });
+  if (!data.issue) {
+    throw new Error(`Issue not found: ${identifier}`);
+  }
+  return data.issue;
+}
+
+/**
+ * Fetch Linear issues by team key
+ */
+async function fetchLinearTeamIssues(teamKey) {
+  const query = `
+    query($teamKey: String!) {
+      teams(filter: { key: { eq: $teamKey } }) {
+        nodes {
+          id
+          name
+          key
+          issues(
+            filter: { state: { type: { nin: ["canceled", "completed"] } } }
+            orderBy: updatedAt
+            first: 50
+          ) {
+            nodes {
+              identifier
+              title
+              priority
+              priorityLabel
+              state { name }
+              assignee { displayName }
+              url
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(query, { teamKey });
+  const team = data.teams?.nodes?.[0];
+  if (!team) {
+    throw new Error(`Team not found: ${teamKey}`);
+  }
+  return team;
+}
+
+/**
+ * Fetch all teams for workspace exploration (lightweight — no issues)
+ */
+async function fetchLinearTeams() {
+  const query = `
+    query {
+      teams {
+        nodes {
+          key
+          name
+          issueCount
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(query);
+  return data.teams?.nodes || [];
+}
+
+/**
+ * Fetch Linear project issues by slug
+ */
+async function fetchLinearProjectIssues(projectSlug) {
+  const query = `
+    query($slug: String!) {
+      projects(filter: { slugId: { eq: $slug } }, first: 1) {
+        nodes {
+          name
+          description
+          state
+          url
+          issues(
+            filter: { state: { type: { nin: ["canceled", "completed"] } } }
+            orderBy: updatedAt
+            first: 50
+          ) {
+            nodes {
+              identifier
+              title
+              priority
+              priorityLabel
+              state { name }
+              assignee { displayName }
+              team { key }
+              url
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(query, { slug: projectSlug });
+  const project = data.projects?.nodes?.[0];
+  if (!project) {
+    throw new Error(`Project not found: ${projectSlug}`);
+  }
+  return project;
+}
+
+/**
+ * Post a comment on a Linear issue
+ */
+async function postLinearComment(issueIdentifier, body) {
+  const issueData = await linearGraphQL(
+    `query($id: String!) { issue(id: $id) { id } }`,
+    { id: issueIdentifier },
+  );
+
+  if (!issueData.issue) {
+    throw new Error(`Issue not found: ${issueIdentifier}`);
+  }
+
+  const mutation = `
+    mutation($issueId: String!, $body: String!) {
+      commentCreate(input: { issueId: $issueId, body: $body }) {
+        success
+        comment { id url }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(mutation, {
+    issueId: issueData.issue.id,
+    body,
+  });
+
+  if (!data.commentCreate?.success) {
+    throw new Error("Failed to create comment on Linear issue");
+  }
+
+  return data.commentCreate.comment;
+}
+
+/**
+ * Print Linear issue details
+ */
+async function printLinearIssueDetails(issue) {
+  console.log("");
+  boxHeader(`${issue.identifier}: ${issue.title}`);
+  console.log("");
+  field("state", issue.state?.name || "unknown");
+  field("priority", issue.priorityLabel || "none");
+  field("team", issue.team ? `${issue.team.key} (${issue.team.name})` : "none");
+  if (issue.assignee) field("assignee", issue.assignee.displayName || issue.assignee.name);
+  if (issue.creator) field("creator", issue.creator.displayName || issue.creator.name);
+  if (issue.project) field("project", issue.project.name);
+  if (issue.labels?.nodes?.length > 0) {
+    field("labels", issue.labels.nodes.map((l) => l.name).join(", "));
+  }
+  if (issue.estimate) field("estimate", String(issue.estimate));
+  if (issue.dueDate) field("due", issue.dueDate);
+  field("created", new Date(issue.createdAt).toLocaleString());
+  field("updated", new Date(issue.updatedAt).toLocaleString());
+  field("url", issue.url);
+
+  console.log("");
+  console.log(hr("─"));
+  console.log("");
+  console.log(issue.description || "(no description provided)");
+  console.log("");
+  console.log(hr("─"));
+
+  if (issue.parent) {
+    sectionHeader("PARENT ISSUE");
+    console.log(`  ${issue.parent.identifier}: ${issue.parent.title}`);
+  }
+
+  if (issue.children?.nodes?.length > 0) {
+    sectionHeader("SUB-ISSUES");
+    console.log("");
+    issue.children.nodes.forEach((child) => {
+      console.log(`  ${child.identifier}  [${child.state?.name}]  ${child.title}`);
+    });
+  }
+
+  if (issue.relations?.nodes?.length > 0) {
+    sectionHeader("RELATED ISSUES");
+    console.log("");
+    issue.relations.nodes.forEach((rel) => {
+      console.log(`  ${rel.type}: ${rel.relatedIssue.identifier}  [${rel.relatedIssue.state?.name}]  ${rel.relatedIssue.title}`);
+    });
+  }
+
+  if (issue.attachments?.nodes?.length > 0) {
+    sectionHeader("ATTACHMENTS");
+    console.log("");
+    issue.attachments.nodes.forEach((att) => {
+      console.log(`  ${att.title || "attachment"}: ${att.url}`);
+    });
+  }
+
+  if (issue.comments?.nodes?.length > 0) {
+    sectionHeader(`COMMENTS (${issue.comments.nodes.length})`);
+    issue.comments.nodes.forEach((comment) => {
+      console.log("");
+      const author = comment.user?.displayName || comment.user?.name || "unknown";
+      const date = new Date(comment.createdAt).toLocaleString();
+      console.log(`  ${author} (${date}):`);
+      console.log(`  ${comment.body}`);
+    });
+  }
+
+  // Extract and download images from description
+  const imageUrls = extractImageUrls(issue.description);
+  if (imageUrls.length > 0) {
+    console.log(`\n> ${imageUrls.length} image attachment(s) found. downloading...\n`);
+
+    const outputDir = "/tmp/grog-attachments";
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
+
+    const downloadedFiles = [];
+    for (let i = 0; i < imageUrls.length; i++) {
+      try {
+        const tempPath = join(outputDir, `temp-${Date.now()}-${i}`);
+        const response = await fetch(imageUrls[i]);
+        if (!response.ok) throw new Error(`${response.status}`);
+        const buffer = await response.arrayBuffer();
+        const contentType = response.headers.get("content-type") || "";
+        writeFileSync(tempPath, Buffer.from(buffer));
+        const ext = getExtension(contentType);
+        const filename = `linear-${issue.identifier}-img-${i + 1}.${ext}`;
+        const finalPath = join(outputDir, filename);
+        renameSync(tempPath, finalPath);
+        console.log(`  > ${finalPath} (${(buffer.byteLength / 1024).toFixed(1)} KB)`);
+        downloadedFiles.push(finalPath);
+      } catch (err) {
+        console.error(`  ! failed to download image ${i + 1}: ${err.message}`);
+      }
+    }
+
+    if (downloadedFiles.length > 0) {
+      sectionHeader("IMAGE ATTACHMENTS");
+      console.log("");
+      downloadedFiles.forEach((f) => console.log(`  ${f}`));
+      console.log("");
+      console.log("  (use Read tool to analyze these)");
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// GitHub API
+// ─────────────────────────────────────────────────────────
 
 /**
  * Fetch issue from GitHub API
@@ -668,13 +1036,36 @@ async function printIssueDetails(issue, owner, repo) {
 }
 
 /**
- * Handle 'solve' command - fetch and display a single issue
+ * Handle 'solve' command - fetch and display a single issue (GitHub or Linear)
  */
 async function handleSolve(issueUrl) {
+  const platform = detectPlatform(issueUrl);
+
+  if (platform === "linear") {
+    requireLinearToken();
+    const parsed = parseLinearIssueUrl(issueUrl);
+    if (!parsed) {
+      console.error("! error: invalid Linear issue URL");
+      console.error("  expected: https://linear.app/workspace/issue/PROJ-123");
+      process.exit(1);
+    }
+    try {
+      console.log(`> fetching Linear issue ${parsed.identifier}...`);
+      const issue = await fetchLinearIssue(parsed.identifier);
+      await printLinearIssueDetails(issue);
+    } catch (error) {
+      console.error("! error:", error.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  requireGhToken();
   const parsed = parseGitHubIssueUrl(issueUrl);
   if (!parsed) {
-    console.error("! error: invalid GitHub issue URL");
+    console.error("! error: invalid issue URL");
     console.error("  expected: https://github.com/owner/repo/issues/123");
+    console.error("       or:  https://linear.app/workspace/issue/PROJ-123");
     process.exit(1);
   }
 
@@ -1025,9 +1416,10 @@ async function printPrDetails(pr, files, reviewComments, issueComments, reviews,
 }
 
 /**
- * Handle 'review' command - fetch PR details for code review
+ * Handle 'review' command - fetch PR details for code review (GitHub only)
  */
 async function handleReview(prUrl) {
+  requireGhToken();
   const parsed = parseGitHubPrUrl(prUrl);
   if (!parsed) {
     console.error("Error: Invalid GitHub pull request URL");
@@ -1064,16 +1456,198 @@ async function handleReview(prUrl) {
 }
 
 /**
- * Handle 'explore' command - list issues from a project or repo for batch processing
+ * Handle 'explore' command for Linear team
+ */
+async function handleExploreLinearTeam(teamKey) {
+  console.log(`> fetching issues from Linear team ${teamKey}...`);
+
+  const team = await fetchLinearTeamIssues(teamKey);
+  const issues = team.issues?.nodes || [];
+
+  console.log("");
+  boxHeader(`${team.key} — ${team.name}`);
+  console.log("");
+  console.log(`  ${issues.length} active issue(s)`);
+
+  // Group by state
+  const byState = new Map();
+  issues.forEach((issue) => {
+    const state = issue.state?.name || "No Status";
+    if (!byState.has(state)) byState.set(state, []);
+    byState.get(state).push(issue);
+  });
+
+  sectionHeader("ISSUES BY STATUS");
+
+  for (const [state, stateIssues] of byState) {
+    console.log("");
+    console.log(`  [${state}] (${stateIssues.length})`);
+    stateIssues.forEach((issue) => {
+      const assignee = issue.assignee?.displayName ? ` @${issue.assignee.displayName}` : "";
+      const labels = issue.labels?.nodes?.length > 0 ? `  [${issue.labels.nodes.map((l) => l.name).join(", ")}]` : "";
+      console.log(`    ${issue.identifier}  ${issue.title}${assignee}${labels}`);
+    });
+  }
+
+  sectionHeader("ALL ISSUES");
+  console.log("");
+  issues.forEach((issue, index) => {
+    const priority = issue.priorityLabel ? `[${issue.priorityLabel}]` : "";
+    console.log(`  ${String(index + 1).padStart(3)}.  ${issue.identifier}  ${issue.title}  ${priority}`);
+  });
+
+  sectionHeader("NEXT STEPS");
+  console.log(`
+Ask the user which issues they want to work on. They can specify:
+- A status name (e.g., "In Progress", "Todo") to work on all issues with that status
+- Specific issue identifiers (e.g., "${teamKey}-123, ${teamKey}-456")
+- "all" to work on all active issues
+
+Once the user selects, process each issue one by one:
+1. Fetch the full issue details using: /grog-solve <linear-issue-url>
+2. Implement the solution
+3. Commit the changes
+4. Move to the next issue
+`);
+}
+
+/**
+ * Handle 'explore' command for Linear workspace (all teams)
+ */
+async function handleExploreLinearWorkspace(workspace) {
+  console.log(`> fetching all teams from Linear workspace ${workspace}...`);
+
+  const teams = await fetchLinearTeams();
+
+  if (teams.length === 0) {
+    console.log("> no teams found.");
+    process.exit(0);
+  }
+
+  console.log("");
+  boxHeader(`Linear — ${workspace}`);
+  console.log("");
+
+  console.log(`  ${teams.length} team(s)`);
+
+  sectionHeader("TEAMS");
+  console.log("");
+  for (const team of teams) {
+    const count = team.issueCount != null ? ` (${team.issueCount} issues)` : "";
+    console.log(`    ${team.key}  ${team.name}${count}`);
+  }
+
+  sectionHeader("NEXT STEPS");
+  console.log(`
+Ask the user which team they want to explore. They can specify:
+- A team key (e.g., "${teams[0]?.key || "PROJ"}") to see that team's active issues
+
+Then run: /grog-explore https://linear.app/${workspace}/team/<TEAM_KEY>
+
+Available teams: ${teams.map((t) => t.key).join(", ")}
+`);
+}
+
+/**
+ * Handle 'explore' command for Linear project
+ */
+async function handleExploreLinearProject(projectSlug) {
+  console.log(`> fetching issues from Linear project...`);
+
+  const project = await fetchLinearProjectIssues(projectSlug);
+  const issues = project.issues?.nodes || [];
+
+  console.log("");
+  boxHeader(project.name);
+  console.log("");
+  if (project.description) console.log(`  ${project.description}`);
+  console.log(`  state: ${project.state}`);
+  console.log(`  ${issues.length} active issue(s)`);
+
+  // Group by state
+  const byState = new Map();
+  issues.forEach((issue) => {
+    const state = issue.state?.name || "No Status";
+    if (!byState.has(state)) byState.set(state, []);
+    byState.get(state).push(issue);
+  });
+
+  sectionHeader("ISSUES BY STATUS");
+
+  for (const [state, stateIssues] of byState) {
+    console.log("");
+    console.log(`  [${state}] (${stateIssues.length})`);
+    stateIssues.forEach((issue) => {
+      const assignee = issue.assignee?.displayName ? ` @${issue.assignee.displayName}` : "";
+      console.log(`    ${issue.identifier}  ${issue.title}${assignee}`);
+    });
+  }
+
+  sectionHeader("ALL ISSUES");
+  console.log("");
+  issues.forEach((issue, index) => {
+    const priority = issue.priorityLabel ? `[${issue.priorityLabel}]` : "";
+    const team = issue.team?.key ? `${issue.team.key}/` : "";
+    console.log(`  ${String(index + 1).padStart(3)}.  ${team}${issue.identifier}  ${issue.title}  ${priority}`);
+  });
+
+  sectionHeader("NEXT STEPS");
+  console.log(`
+Ask the user which issues they want to work on. They can specify:
+- A status name (e.g., "In Progress", "Todo") to work on all issues with that status
+- Specific issue identifiers (e.g., "PROJ-123, PROJ-456")
+- "all" to work on all active issues
+
+Once the user selects, process each issue one by one:
+1. Fetch the full issue details using: /grog-solve <linear-issue-url>
+2. Implement the solution
+3. Commit the changes
+4. Move to the next issue
+`);
+}
+
+/**
+ * Handle 'explore' command - list issues from a project or repo for batch processing (GitHub or Linear)
  */
 async function handleExplore(url) {
+  const platform = detectPlatform(url);
+
+  if (platform === "linear") {
+    requireLinearToken();
+    const parsed = parseLinearUrl(url);
+    if (!parsed) {
+      console.error("! error: invalid Linear URL");
+      console.error("  expected formats:");
+      console.error("    https://linear.app/workspace/team/PROJ");
+      console.error("    https://linear.app/workspace/project/my-project");
+      console.error("    https://linear.app/workspace");
+      process.exit(1);
+    }
+
+    try {
+      if (parsed.type === "team") {
+        await handleExploreLinearTeam(parsed.teamKey);
+      } else if (parsed.type === "project") {
+        await handleExploreLinearProject(parsed.projectSlug);
+      } else {
+        await handleExploreLinearWorkspace(parsed.workspace);
+      }
+    } catch (error) {
+      console.error("! error:", error.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  requireGhToken();
   const parsed = parseGitHubUrl(url);
   if (!parsed) {
-    console.error("! error: invalid GitHub URL");
+    console.error("! error: invalid URL");
     console.error("  expected formats:");
     console.error("    https://github.com/owner/repo");
     console.error("    https://github.com/orgs/orgname/projects/123");
-    console.error("    https://github.com/users/username/projects/123");
+    console.error("    https://linear.app/workspace/team/PROJ");
+    console.error("    https://linear.app/workspace");
     process.exit(1);
   }
 
@@ -1094,22 +1668,9 @@ async function handleExplore(url) {
 }
 
 /**
- * Handle 'answer' command - post a summary comment to a GitHub issue or PR
+ * Handle 'answer' command - post a summary comment to a GitHub issue/PR or Linear issue
  */
 async function handleAnswer(issueUrl, summaryFilePath) {
-  const issueParsed = parseGitHubIssueUrl(issueUrl);
-  const prParsed = parseGitHubPrUrl(issueUrl);
-  const parsed = issueParsed || prParsed;
-  if (!parsed) {
-    console.error("! error: invalid GitHub issue or PR URL");
-    console.error("  expected: https://github.com/owner/repo/issues/123");
-    console.error("       or:  https://github.com/owner/repo/pull/123");
-    process.exit(1);
-  }
-
-  const number = parsed.issueNumber || parsed.prNumber;
-  const type = issueParsed ? "issue" : "PR";
-
   if (!summaryFilePath) {
     console.error("! error: missing summary file path");
     console.error("  usage: grog answer <issue-or-pr-url> <path-to-summary-file>");
@@ -1118,7 +1679,6 @@ async function handleAnswer(issueUrl, summaryFilePath) {
 
   let summary;
   try {
-    const { readFileSync } = await import("fs");
     summary = readFileSync(summaryFilePath, "utf-8").trim();
   } catch (err) {
     console.error(`! error: could not read summary file: ${err.message}`);
@@ -1129,6 +1689,43 @@ async function handleAnswer(issueUrl, summaryFilePath) {
     console.error("! error: summary file is empty");
     process.exit(1);
   }
+
+  const platform = detectPlatform(issueUrl);
+
+  if (platform === "linear") {
+    requireLinearToken();
+    const parsed = parseLinearIssueUrl(issueUrl);
+    if (!parsed) {
+      console.error("! error: invalid Linear issue URL");
+      console.error("  expected: https://linear.app/workspace/issue/PROJ-123");
+      process.exit(1);
+    }
+
+    try {
+      console.log(`> posting comment to Linear issue ${parsed.identifier}...`);
+      const comment = await postLinearComment(parsed.identifier, summary);
+      console.log(`> comment posted: ${comment.url || "success"}`);
+    } catch (error) {
+      console.error("! error:", error.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  requireGhToken();
+  const issueParsed = parseGitHubIssueUrl(issueUrl);
+  const prParsed = parseGitHubPrUrl(issueUrl);
+  const parsed = issueParsed || prParsed;
+  if (!parsed) {
+    console.error("! error: invalid issue or PR URL");
+    console.error("  expected: https://github.com/owner/repo/issues/123");
+    console.error("       or:  https://github.com/owner/repo/pull/123");
+    console.error("       or:  https://linear.app/workspace/issue/PROJ-123");
+    process.exit(1);
+  }
+
+  const number = parsed.issueNumber || parsed.prNumber;
+  const type = issueParsed ? "issue" : "PR";
 
   try {
     console.log(
@@ -1582,20 +2179,25 @@ async function main() {
     boxHeader("GROG");
     console.log("");
     console.log("  usage:");
-    console.log("    grog solve <issue-url>       fetch and solve a single issue");
-    console.log("    grog explore <project-url>   list all issues for batch processing");
-    console.log("    grog review <pr-url>         fetch PR details for code review");
-    console.log("    grog answer <issue-url> <file>  post a summary comment to an issue");
+    console.log("    grog solve <issue-url>          fetch and solve a single issue (GitHub or Linear)");
+    console.log("    grog explore <url>              list all issues for batch processing (GitHub or Linear)");
+    console.log("    grog review <pr-url>            fetch PR details for code review (GitHub only)");
+    console.log("    grog answer <url> <file>        post a summary comment (GitHub or Linear)");
     console.log("    grog talk                       connect to Telegram for remote interaction");
-    console.log("    grog notify <message>           send a quick Telegram notification (no talk session needed)");
+    console.log("    grog notify <message>           send a quick Telegram notification");
     console.log("");
-    console.log("  examples:");
+    console.log("  github examples:");
     console.log("    grog solve https://github.com/owner/repo/issues/123");
     console.log("    grog explore https://github.com/owner/repo");
     console.log("    grog explore https://github.com/orgs/myorg/projects/1");
     console.log("    grog review https://github.com/owner/repo/pull/123");
     console.log("    grog answer https://github.com/owner/repo/issues/123 /tmp/summary.md");
-    console.log("    grog talk");
+    console.log("");
+    console.log("  linear examples:");
+    console.log("    grog solve https://linear.app/workspace/issue/PROJ-123");
+    console.log("    grog explore https://linear.app/workspace/team/PROJ");
+    console.log("    grog explore https://linear.app/workspace");
+    console.log("    grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md");
     console.log("");
     process.exit(1);
   }
@@ -1693,7 +2295,11 @@ async function main() {
 
     default:
       // Backwards compatibility: if the argument looks like a URL, auto-detect command
-      if (command.includes("github.com") && command.includes("/issues/")) {
+      if (command.includes("linear.app") && command.includes("/issue/")) {
+        await handleSolve(command);
+      } else if (command.includes("linear.app")) {
+        await handleExplore(command);
+      } else if (command.includes("github.com") && command.includes("/issues/")) {
         await handleSolve(command);
       } else if (command.includes("github.com") && command.includes("/pull/")) {
         await handleReview(command);

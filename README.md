@@ -1,6 +1,6 @@
 # Grog
 
-Grog is an autonomous GitHub issue solver. Point it at an issue, and it uses Claude to analyze code, implement fixes, and open pull requests — without human intervention.
+Grog is an autonomous GitHub and Linear issue solver. Point it at an issue, and it uses Claude to analyze code, implement fixes, and open pull requests — without human intervention. Works with both GitHub and Linear — the tool auto-detects the platform from the URL.
 
 ## How It Works
 
@@ -26,7 +26,7 @@ grog/
   agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
   api/      - SaaS API server (OAuth, billing, Stripe)
   app/      - SaaS frontend (React)
-  skill/    - Claude Code CLI skills (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
+  skill/    - Claude Code CLI skills — GitHub + Linear support (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
   pm2/      - PM2 ecosystem config for production
 ```
 
@@ -199,12 +199,22 @@ cd skill && ./install.sh
 Then in any Claude Code session:
 
 ```
+# GitHub
 /grog-solve https://github.com/owner/repo/issues/123
 /grog-explore https://github.com/owner/repo
 /grog-review https://github.com/owner/repo/pull/456
-/grog-answer https://github.com/owner/repo/issues/123  # or /pull/123
+/grog-answer https://github.com/owner/repo/issues/123
+
+# Linear
+/grog-solve https://linear.app/workspace/issue/PROJ-123
+/grog-explore https://linear.app/workspace/team/PROJ
+/grog-explore https://linear.app/workspace
+/grog-answer https://linear.app/workspace/issue/PROJ-123
+
 /grog-talk
 ```
+
+The same commands work for both platforms — grog auto-detects GitHub vs Linear from the URL.
 
 ### Telegram Bridge
 
@@ -222,10 +232,15 @@ All credentials are stored in `~/.grog/config.json`:
 ```json
 {
   "ghToken": "ghp_...",
+  "linearApiKey": "lin_api_...",
   "telegramBotToken": "123456:ABC...",
   "telegramChatId": "12345678"
 }
 ```
+
+- **ghToken** — GitHub Personal Access Token ([create one](https://github.com/settings/tokens))
+- **linearApiKey** — Linear API key ([create one](https://linear.app/settings/api))
+- **telegramBotToken** / **telegramChatId** — for `/grog-talk` bridge
 
 Legacy `.env` files in `~/.claude/tools/grog/.env` are still supported as a fallback.
 

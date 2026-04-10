@@ -20,7 +20,7 @@ echo "│  ██   ███ ██████  ██    ██ ██   █�
 echo "│  ██    ██ ██   ██ ██    ██ ██    ██      │"
 echo "│   ██████  ██   ██  ██████   ██████       │"
 echo "│                                          │"
-echo "│   github issue fetcher for claude code   │"
+echo "│  github + linear for claude code          │"
 echo "│                                          │"
 echo "└──────────────────────────────────────────┘"
 echo ""
@@ -66,7 +66,7 @@ set_env_var() {
   chmod 600 "$file"
 }
 
-echo -e "${BOLD}[1/6]${NC} creating directories..."
+echo -e "${BOLD}[1/7]${NC} creating directories..."
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$GROG_CONFIG_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
@@ -81,13 +81,13 @@ echo "  > $GROG_CONFIG_DIR"
 echo "  > skill directories"
 
 echo ""
-echo -e "${BOLD}[2/6]${NC} copying files..."
+echo -e "${BOLD}[2/7]${NC} copying files..."
 cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
 echo "  > index.js and package.json"
 
 echo ""
-echo -e "${BOLD}[3/6]${NC} installing dependencies..."
+echo -e "${BOLD}[3/7]${NC} installing dependencies..."
 cd "$TOOLS_DIR"
 npm install --silent
 echo "  > dependencies installed"
@@ -110,7 +110,7 @@ if [ -f "$TOOLS_DIR/.env" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[4/6]${NC} configuring GitHub token..."
+echo -e "${BOLD}[4/7]${NC} configuring GitHub token..."
 echo ""
 echo "To fetch GitHub issues, grog needs a Personal Access Token."
 echo "You can create one at: https://github.com/settings/tokens"
@@ -142,7 +142,38 @@ if [ "$SKIP_TOKEN" != "true" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[5/6]${NC} configuring Telegram (optional)..."
+echo -e "${BOLD}[5/7]${NC} configuring Linear API key (optional)..."
+echo ""
+echo "  grog can also fetch and comment on Linear issues."
+echo "  create an API key at: https://linear.app/settings/api"
+echo ""
+
+SKIP_LINEAR=false
+
+CURRENT_LINEAR_KEY=$(get_config_val "linearApiKey")
+if [ -n "$CURRENT_LINEAR_KEY" ]; then
+    echo "  a Linear API key already exists"
+    read -p "  replace it? (y/N): " REPLACE_LINEAR
+    if [[ ! "$REPLACE_LINEAR" =~ ^[Yy]$ ]]; then
+        echo "  > keeping existing Linear config"
+        SKIP_LINEAR=true
+    fi
+fi
+
+if [ "$SKIP_LINEAR" != "true" ]; then
+    read -p "  enter your Linear API key (or press Enter to skip): " LINEAR_API_KEY_INPUT
+
+    if [ -n "$LINEAR_API_KEY_INPUT" ]; then
+        set_config_val "linearApiKey" "$LINEAR_API_KEY_INPUT"
+        set_env_var "LINEAR_API_KEY" "$LINEAR_API_KEY_INPUT"
+        echo "  > Linear API key saved to $GROG_CONFIG"
+    else
+        echo "  > skipped. add linearApiKey to $GROG_CONFIG later to enable."
+    fi
+fi
+
+echo ""
+echo -e "${BOLD}[6/7]${NC} configuring Telegram (optional)..."
 echo ""
 echo "  grog talk lets you interact with Claude Code remotely via Telegram."
 echo "  /grog-talk lets you interact with Claude Code remotely via Telegram."
@@ -181,20 +212,20 @@ if [ "$SKIP_TG" != "true" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[6/6]${NC} creating Claude Code skills..."
+echo -e "${BOLD}[7/7]${NC} creating Claude Code skills..."
 
 # Skill 1: /grog-solve - Fetch and solve a single issue
 cat > "$SKILLS_DIR/grog-solve/SKILL.md" << 'EOF'
 ---
 name: grog-solve
-description: Fetch and solve a GitHub issue. Use when the user provides a GitHub issue URL or asks to solve/fix/implement a GitHub issue.
+description: Fetch and solve a GitHub issue or Linear issue. Use when the user provides a GitHub issue URL, Linear issue URL, or asks to solve/fix/implement an issue.
 allowed-tools: Bash, Read
-argument-hint: <github-issue-url>
+argument-hint: <issue-url>
 ---
 
-# GROG Solve - GitHub Issue Solver
+# GROG Solve - Issue Solver (GitHub + Linear)
 
-Fetch a GitHub issue and immediately start solving it.
+Fetch an issue from GitHub or Linear and immediately start solving it. The tool auto-detects the platform from the URL.
 
 ## Personality & Voice
 
@@ -227,13 +258,17 @@ Personality shapes your commentary and summaries. It never compromises code qual
 
 ## Usage
 
-When the user provides a GitHub issue URL (like `https://github.com/owner/repo/issues/123`), run:
+When the user provides an issue URL (GitHub or Linear), run:
 
 ```bash
 node ~/.claude/tools/grog/index.js solve $ARGUMENTS
 ```
 
-The tool automatically downloads any image attachments to `/tmp/grog-attachments/`.
+Supported URL formats:
+- GitHub: `https://github.com/owner/repo/issues/123`
+- Linear: `https://linear.app/workspace/issue/PROJ-123`
+
+The tool auto-detects the platform and downloads any image attachments to `/tmp/grog-attachments/`.
 
 ## IMPORTANT: Analyze Image Attachments
 
@@ -265,8 +300,9 @@ Be proactive: your goal is to solve the issue, not just report on it.
 
 ## Error Handling
 
-- If no URL is provided, ask the user for the GitHub issue URL
-- If the token is missing, inform the user to run the install script again or manually add ghToken to `~/.grog/config.json`
+- If no URL is provided, ask the user for the issue URL (GitHub or Linear)
+- If the GitHub token is missing, inform the user to add ghToken to `~/.grog/config.json`
+- If the Linear token is missing, inform the user to add linearApiKey to `~/.grog/config.json`
 EOF
 
 echo "  > /grog-solve skill"
@@ -275,14 +311,14 @@ echo "  > /grog-solve skill"
 cat > "$SKILLS_DIR/grog-explore/SKILL.md" << 'EOF'
 ---
 name: grog-explore
-description: Explore a GitHub repository's issues for batch processing. Use when the user provides a GitHub repo URL and wants to work through multiple issues.
+description: Explore a GitHub repository's or Linear team's issues for batch processing. Use when the user provides a GitHub repo URL, Linear team/workspace URL, and wants to work through multiple issues.
 allowed-tools: Bash, Read
-argument-hint: <github-project-url>
+argument-hint: <project-url>
 ---
 
-# GROG Explore - GitHub Project Issue Explorer
+# GROG Explore - Issue Explorer (GitHub + Linear)
 
-List all issues from a GitHub Project or repository for batch processing.
+List all issues from a GitHub Project/repository or Linear team/workspace for batch processing. The tool auto-detects the platform from the URL.
 
 ## Personality & Voice
 
@@ -315,21 +351,21 @@ Personality shapes your commentary and summaries. It never compromises code qual
 
 ## Usage
 
-Supports both GitHub Projects and repositories:
-
 ```bash
-# For GitHub Projects (recommended for multi-repo workflows)
-node ~/.claude/tools/grog/index.js explore https://github.com/orgs/orgname/projects/1
-
-# For a single repository
-node ~/.claude/tools/grog/index.js explore https://github.com/owner/repo
+node ~/.claude/tools/grog/index.js explore $ARGUMENTS
 ```
 
 ## Supported URL formats
 
+**GitHub:**
 - **Org Project**: `https://github.com/orgs/orgname/projects/123`
 - **User Project**: `https://github.com/users/username/projects/123`
 - **Repository**: `https://github.com/owner/repo`
+
+**Linear:**
+- **Team**: `https://linear.app/workspace/team/PROJ`
+- **Project**: `https://linear.app/workspace/project/my-project`
+- **Workspace**: `https://linear.app/workspace` (lists all teams)
 
 ## IMPORTANT: Repository Detection (Do NOT clone from scratch)
 
@@ -361,8 +397,9 @@ Before processing any issue, check if you are already inside the correct reposit
 
 ## Error Handling
 
-- If no URL is provided, ask the user for the GitHub project or repository URL
-- If the token is missing, inform the user to run the install script again or manually add ghToken to `~/.grog/config.json`
+- If no URL is provided, ask the user for the GitHub or Linear URL
+- If the GitHub token is missing, inform the user to add ghToken to `~/.grog/config.json`
+- If the Linear token is missing, inform the user to add linearApiKey to `~/.grog/config.json`
 EOF
 
 echo "  > /grog-explore skill"
@@ -466,14 +503,14 @@ echo "  > /grog-review skill"
 cat > "$SKILLS_DIR/grog-answer/SKILL.md" << 'EOF'
 ---
 name: grog-answer
-description: Post a summary comment to a GitHub issue or pull request. Use when the user wants to post their work summary or a comment to an issue or PR.
+description: Post a summary comment to a GitHub issue/PR or Linear issue. Use when the user wants to post their work summary or a comment to an issue or PR.
 allowed-tools: Bash, Read, Write
-argument-hint: <github-issue-or-pr-url>
+argument-hint: <issue-or-pr-url>
 ---
 
-# GROG Answer - Post Summary to GitHub Issue or PR
+# GROG Answer - Post Summary (GitHub + Linear)
 
-Post a summary of what was done as a comment on a GitHub issue or pull request.
+Post a summary of what was done as a comment on a GitHub issue/PR or Linear issue. The tool auto-detects the platform from the URL.
 
 ## Personality & Voice
 
@@ -534,9 +571,10 @@ Keep it concise but informative.
 
 ## Error Handling
 
-- If no URL is provided, ask the user for the GitHub issue or PR URL
-- Both issue URLs (`/issues/123`) and PR URLs (`/pull/123`) are supported
-- If the token is missing, inform the user to run the install script again or manually add ghToken to `~/.grog/config.json`
+- If no URL is provided, ask the user for the issue or PR URL (GitHub or Linear)
+- GitHub issue URLs (`/issues/123`), PR URLs (`/pull/123`), and Linear issue URLs are all supported
+- If the GitHub token is missing, inform the user to add ghToken to `~/.grog/config.json`
+- If the Linear token is missing, inform the user to add linearApiKey to `~/.grog/config.json`
 EOF
 
 echo "  > /grog-answer skill"
@@ -643,18 +681,25 @@ echo "└───────────────────────�
 echo ""
 echo "  commands available in any Claude Code session:"
 echo ""
-echo "    /grog-solve <issue-url>     fetch and solve a single issue"
-echo "    /grog-explore <repo-url>    list all issues for batch processing"
-echo "    /grog-review <pr-url>       review a pull request"
+echo "    /grog-solve <issue-url>     fetch and solve an issue (GitHub or Linear)"
+echo "    /grog-explore <url>         list all issues for batch processing"
+echo "    /grog-review <pr-url>       review a pull request (GitHub only)"
 echo "    /grog-answer <url>          post a summary comment to an issue or PR"
 echo "    /grog-talk                  connect to Telegram for remote interaction"
 echo ""
-echo "  examples:"
+echo "  github examples:"
 echo "    /grog-solve https://github.com/owner/repo/issues/123"
 echo "    /grog-explore https://github.com/orgs/myorg/projects/1"
 echo "    /grog-explore https://github.com/owner/repo"
 echo "    /grog-review https://github.com/owner/repo/pull/123"
-echo "    /grog-answer https://github.com/owner/repo/issues/123  # or /pull/123"
+echo "    /grog-answer https://github.com/owner/repo/issues/123"
+echo ""
+echo "  linear examples:"
+echo "    /grog-solve https://linear.app/workspace/issue/PROJ-123"
+echo "    /grog-explore https://linear.app/workspace/team/PROJ"
+echo "    /grog-explore https://linear.app/workspace"
+echo "    /grog-answer https://linear.app/workspace/issue/PROJ-123"
+echo ""
 echo "    /grog-talk"
 echo ""
 echo "  files:"
