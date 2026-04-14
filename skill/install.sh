@@ -142,34 +142,41 @@ if [ "$SKIP_TOKEN" != "true" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[5/7]${NC} configuring Linear API key (optional)..."
+echo -e "${BOLD}[5/7]${NC} configuring Linear workspaces (optional, multi-workspace)..."
 echo ""
-echo "  grog can also fetch and comment on Linear issues."
-echo "  create an API key at: https://linear.app/settings/api"
+echo "  grog supports multiple Linear workspaces. Each project declares which one"
+echo "  to use via a '.grog' file in its root (workspace=NAME)."
+echo "  Create API keys at: https://linear.app/settings/api"
 echo ""
 
-SKIP_LINEAR=false
-
-CURRENT_LINEAR_KEY=$(get_config_val "linearApiKey")
-if [ -n "$CURRENT_LINEAR_KEY" ]; then
-    echo "  a Linear API key already exists"
-    read -p "  replace it? (y/N): " REPLACE_LINEAR
-    if [[ ! "$REPLACE_LINEAR" =~ ^[Yy]$ ]]; then
-        echo "  > keeping existing Linear config"
-        SKIP_LINEAR=true
-    fi
+EXISTING_LINEAR_OBJ=$(jq -r '.linear // empty | keys[]?' "$GROG_CONFIG" 2>/dev/null)
+if [ -n "$EXISTING_LINEAR_OBJ" ]; then
+    echo "  configured workspaces:"
+    echo "$EXISTING_LINEAR_OBJ" | sed 's/^/    - /'
+    echo ""
 fi
 
-if [ "$SKIP_LINEAR" != "true" ]; then
-    read -p "  enter your Linear API key (or press Enter to skip): " LINEAR_API_KEY_INPUT
-
-    if [ -n "$LINEAR_API_KEY_INPUT" ]; then
-        set_config_val "linearApiKey" "$LINEAR_API_KEY_INPUT"
-        set_env_var "LINEAR_API_KEY" "$LINEAR_API_KEY_INPUT"
-        echo "  > Linear API key saved to $GROG_CONFIG"
-    else
-        echo "  > skipped. add linearApiKey to $GROG_CONFIG later to enable."
+while true; do
+    read -p "  add a Linear workspace? (y/N): " ADD_WS
+    if [[ ! "$ADD_WS" =~ ^[Yy]$ ]]; then break; fi
+    read -p "    workspace name (e.g. MTROPRO, KAIROS): " WS_NAME
+    read -p "    Linear API key for $WS_NAME: " WS_KEY
+    if [ -n "$WS_NAME" ] && [ -n "$WS_KEY" ]; then
+        if [ ! -f "$GROG_CONFIG" ]; then echo '{}' > "$GROG_CONFIG"; fi
+        tmp=$(jq --arg n "$WS_NAME" --arg k "$WS_KEY" '.linear[$n] = $k' "$GROG_CONFIG")
+        echo "$tmp" > "$GROG_CONFIG"
+        chmod 600 "$GROG_CONFIG"
+        echo "    > saved workspace '$WS_NAME' in $GROG_CONFIG"
     fi
+done
+
+# Migrate legacy top-level linearApiKey into .linear.DEFAULT if present and no workspaces defined
+LEGACY_KEY=$(get_config_val "linearApiKey")
+if [ -n "$LEGACY_KEY" ] && [ -z "$(jq -r '.linear // empty | keys[]?' "$GROG_CONFIG" 2>/dev/null)" ]; then
+    echo "  migrating legacy 'linearApiKey' to linear.DEFAULT"
+    tmp=$(jq --arg k "$LEGACY_KEY" '.linear.DEFAULT = $k | del(.linearApiKey)' "$GROG_CONFIG")
+    echo "$tmp" > "$GROG_CONFIG"
+    chmod 600 "$GROG_CONFIG"
 fi
 
 echo ""
@@ -302,7 +309,7 @@ Be proactive: your goal is to solve the issue, not just report on it.
 
 - If no URL is provided, ask the user for the issue URL (GitHub or Linear)
 - If the GitHub token is missing, inform the user to add ghToken to `~/.grog/config.json`
-- If the Linear token is missing, inform the user to add linearApiKey to `~/.grog/config.json`
+- If the Linear token is missing, inform the user to declare the workspace in a `.grog` file (`workspace=NAME`) and add its key under `linear.NAME` in `~/.grog/config.json`
 EOF
 
 echo "  > /grog-solve skill"
@@ -399,7 +406,7 @@ Before processing any issue, check if you are already inside the correct reposit
 
 - If no URL is provided, ask the user for the GitHub or Linear URL
 - If the GitHub token is missing, inform the user to add ghToken to `~/.grog/config.json`
-- If the Linear token is missing, inform the user to add linearApiKey to `~/.grog/config.json`
+- If the Linear token is missing, inform the user to declare the workspace in a `.grog` file (`workspace=NAME`) and add its key under `linear.NAME` in `~/.grog/config.json`
 EOF
 
 echo "  > /grog-explore skill"
@@ -574,7 +581,7 @@ Keep it concise but informative.
 - If no URL is provided, ask the user for the issue or PR URL (GitHub or Linear)
 - GitHub issue URLs (`/issues/123`), PR URLs (`/pull/123`), and Linear issue URLs are all supported
 - If the GitHub token is missing, inform the user to add ghToken to `~/.grog/config.json`
-- If the Linear token is missing, inform the user to add linearApiKey to `~/.grog/config.json`
+- If the Linear token is missing, inform the user to declare the workspace in a `.grog` file (`workspace=NAME`) and add its key under `linear.NAME` in `~/.grog/config.json`
 EOF
 
 echo "  > /grog-answer skill"

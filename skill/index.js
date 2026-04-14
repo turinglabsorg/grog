@@ -25,10 +25,66 @@ const grogConfig = loadGrogConfig();
 
 // Config precedence: ~/.grog/config.json > .env > process.env
 const GH_TOKEN = grogConfig.ghToken || process.env.GH_TOKEN;
-const LINEAR_API_KEY = grogConfig.linearApiKey || process.env.LINEAR_API_KEY;
 const TELEGRAM_BOT_TOKEN = grogConfig.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = grogConfig.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_STATE_FILE = "/tmp/grog-telegram-state.json";
+
+/**
+ * Locate the nearest `.grog` file walking upward from cwd.
+ * Returns the file path or null.
+ */
+function findGrogFile(startDir) {
+  let dir = startDir;
+  while (true) {
+    const candidate = join(dir, ".grog");
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * Resolve which Linear workspace to use. Requires a `.grog` file in the
+ * current project (searched upward from cwd) with a `workspace=NAME` line.
+ * The name must match a key in config.linear. No fallback — if anything is
+ * missing, exits with an actionable error.
+ */
+function resolveLinearApiKey() {
+  const envOverride = process.env.GROG_WORKSPACE;
+  let workspace = envOverride;
+  let source = "GROG_WORKSPACE env";
+
+  if (!workspace) {
+    const grogFile = findGrogFile(process.cwd());
+    if (!grogFile) {
+      console.error("! error: no .grog file found in this project");
+      console.error("  grog refuses to touch Linear without an explicit workspace declaration.");
+      console.error("  create a .grog file in your project root with a line like:");
+      console.error("    workspace=MTROPRO");
+      console.error("  available workspaces:", Object.keys(grogConfig.linear || {}).join(", ") || "(none configured)");
+      process.exit(1);
+    }
+    const content = readFileSync(grogFile, "utf-8");
+    const match = content.match(/^\s*workspace\s*=\s*(\S+)\s*$/m);
+    if (!match) {
+      console.error(`! error: ${grogFile} has no 'workspace=NAME' line`);
+      process.exit(1);
+    }
+    workspace = match[1];
+    source = grogFile;
+  }
+
+  const keys = grogConfig.linear || {};
+  const key = keys[workspace];
+  if (!key) {
+    console.error(`! error: workspace "${workspace}" (from ${source}) not configured in ~/.grog/config.json`);
+    console.error("  expected shape: { \"linear\": { \"" + workspace + "\": \"lin_api_...\" } }");
+    console.error("  configured workspaces:", Object.keys(keys).join(", ") || "(none)");
+    process.exit(1);
+  }
+  return { key, workspace, source };
+}
 
 function detectPlatform(url) {
   if (!url) return null;
@@ -45,12 +101,14 @@ function requireGhToken() {
   }
 }
 
+/**
+ * Lazily resolved on first Linear call. Cached module-wide.
+ * Structure: { key, workspace, source } — see resolveLinearApiKey().
+ */
+let _linearAuth = null;
 function requireLinearToken() {
-  if (!LINEAR_API_KEY) {
-    console.error("! error: LINEAR_API_KEY not found");
-    console.error("  add linearApiKey to ~/.grog/config.json or LINEAR_API_KEY to ~/.claude/tools/grog/.env");
-    process.exit(1);
-  }
+  if (!_linearAuth) _linearAuth = resolveLinearApiKey();
+  return _linearAuth;
 }
 
 /**
@@ -174,10 +232,11 @@ function parseLinearUrl(url) {
  * Execute a Linear GraphQL query
  */
 async function linearGraphQL(query, variables = {}) {
+  const { key } = requireLinearToken();
   const response = await fetch("https://api.linear.app/graphql", {
     method: "POST",
     headers: {
-      Authorization: LINEAR_API_KEY,
+      Authorization: key,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ query, variables }),

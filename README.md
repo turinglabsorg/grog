@@ -232,15 +232,30 @@ All credentials are stored in `~/.grog/config.json`:
 ```json
 {
   "ghToken": "ghp_...",
-  "linearApiKey": "lin_api_...",
+  "linear": {
+    "MTROPRO": "lin_api_...",
+    "KAIROS":  "lin_api_..."
+  },
   "telegramBotToken": "123456:ABC...",
   "telegramChatId": "12345678"
 }
 ```
 
 - **ghToken** — GitHub Personal Access Token ([create one](https://github.com/settings/tokens))
-- **linearApiKey** — Linear API key ([create one](https://linear.app/settings/api))
+- **linear** — one entry per Linear workspace. The key is a logical name you pick (e.g. `MTROPRO`, `KAIROS`); the value is the API key for that workspace ([create keys](https://linear.app/settings/api))
 - **telegramBotToken** / **telegramChatId** — for `/grog-talk` bridge
+
+### Per-project workspace hint (`.grog`)
+
+Every project that uses grog for Linear MUST have a `.grog` file in its root:
+
+```
+workspace=KAIROS
+```
+
+grog walks up from the current working directory until it finds one. If no `.grog` is found, **grog refuses to make Linear calls** and exits with an actionable error. This prevents accidental cross-workspace writes.
+
+Override order: `GROG_WORKSPACE` env var → `.grog` file → error (no default).
 
 Legacy `.env` files in `~/.claude/tools/grog/.env` are still supported as a fallback.
 

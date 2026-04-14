@@ -5,9 +5,10 @@ Autonomous GitHub + Linear workflow tool and Telegram bridge for Claude Code.
 ## Architecture
 
 ```
-~/.grog/config.json          Central config (ghToken, linearApiKey, telegramBotToken, telegramChatId)
+~/.grog/config.json          Central config (ghToken, linear.<workspace>, telegramBotToken, telegramChatId)
 ~/.claude/tools/grog/        Runtime (index.js, node_modules)
 ~/.claude/skills/grog-*/     Skill definitions (SKILL.md files)
+<project>/.grog              Per-project file: workspace=<NAME> (REQUIRED for Linear)
 ```
 
 ## Config
@@ -17,10 +18,31 @@ All credentials live in `~/.grog/config.json`:
 ```json
 {
   "ghToken": "ghp_...",
-  "linearApiKey": "lin_api_...",
+  "linear": {
+    "MTROPRO": "lin_api_...",
+    "KAIROS":  "lin_api_..."
+  },
   "telegramBotToken": "123456:ABC...",
   "telegramChatId": "12345678"
 }
+```
+
+### Linear workspace resolution (multi-workspace)
+
+Linear calls are scoped per project. grog walks up from the current working
+directory looking for a `.grog` file with `workspace=NAME`, then resolves
+the key from `config.linear[NAME]`. **There is NO default** — if the `.grog`
+file is missing or the workspace name is not in config, grog refuses to
+touch Linear and exits with a clear error listing the configured workspaces.
+
+Override order (first hit wins):
+1. `GROG_WORKSPACE` env var
+2. `.grog` file found by walking upward from `cwd`
+3. (no fallback — explicit by design)
+
+Example `.grog` in a project root:
+```
+workspace=KAIROS
 ```
 
 Fallback: `~/.claude/tools/grog/.env` (legacy, kept for backward compat).
