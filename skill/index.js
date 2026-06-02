@@ -3,7 +3,7 @@
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync } from "fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
 
 // Load config from ~/.grog/config.json (primary) with .env fallback
@@ -37,7 +37,12 @@ function findGrogFile(startDir) {
   let dir = startDir;
   while (true) {
     const candidate = join(dir, ".grog");
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) {
+      try {
+        if (statSync(candidate).isFile()) return candidate;
+      } catch {}
+      // Skip directories named .grog (e.g. ~/.grog/ config dir)
+    }
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -201,6 +206,13 @@ function parseLinearIssueUrl(url) {
   return { workspace: match[1], identifier: match[2] };
 }
 
+function parseLinearIssueIdentifier(ref) {
+  const parsed = parseLinearIssueUrl(ref);
+  if (parsed) return parsed.identifier;
+  if (/^[A-Z]+-\d+$/.test(ref)) return ref;
+  return null;
+}
+
 /**
  * Parse Linear team/project URL for exploration
  * @param {string} url - Linear URL like https://linear.app/workspace/team/PROJ/... or https://linear.app/workspace/project/...
@@ -291,6 +303,91 @@ async function fetchLinearIssue(identifier) {
     throw new Error(`Issue not found: ${identifier}`);
   }
   return data.issue;
+}
+
+async function fetchLinearIssueWithWorkflowStates(identifier) {
+  const query = `
+    query($id: String!) {
+      issue(id: $id) {
+        id
+        identifier
+        title
+        url
+        state { id name type }
+        team {
+          key
+          name
+          states {
+            nodes { id name type }
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(query, { id: identifier });
+  if (!data.issue) {
+    throw new Error(`Issue not found: ${identifier}`);
+  }
+  return data.issue;
+}
+
+async function markLinearIssueDone(identifier) {
+  const issue = await fetchLinearIssueWithWorkflowStates(identifier);
+  const states = issue.team?.states?.nodes || [];
+  const doneState =
+    states.find(
+      (state) =>
+        state.type === "completed" &&
+        state.name?.toLowerCase() === "done",
+    ) ||
+    states.find((state) => state.type === "completed");
+
+  if (!doneState) {
+    throw new Error(
+      `No completed workflow state found for team ${issue.team?.key || "unknown"}`,
+    );
+  }
+
+  if (issue.state?.id === doneState.id) {
+    return {
+      issue,
+      changed: false,
+      previousState: issue.state,
+      targetState: doneState,
+    };
+  }
+
+  const mutation = `
+    mutation($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) {
+        success
+        issue {
+          id
+          identifier
+          title
+          url
+          state { id name type }
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(mutation, {
+    id: issue.id,
+    input: { stateId: doneState.id },
+  });
+
+  if (!data.issueUpdate?.success) {
+    throw new Error("Failed to update Linear issue");
+  }
+
+  return {
+    issue: data.issueUpdate.issue,
+    changed: true,
+    previousState: issue.state,
+    targetState: doneState,
+  };
 }
 
 /**
@@ -1138,6 +1235,42 @@ async function handleSolve(issueUrl) {
       parsed.issueNumber,
     );
     await printIssueDetails(issue, parsed.owner, parsed.repo);
+  } catch (error) {
+    console.error("! error:", error.message);
+    process.exit(1);
+  }
+}
+
+async function handleDone(issueRef) {
+  if (detectPlatform(issueRef) && detectPlatform(issueRef) !== "linear") {
+    console.error("! error: done only supports Linear issues");
+    console.error("  usage: grog done <linear-issue-url-or-identifier>");
+    process.exit(1);
+  }
+
+  requireLinearToken();
+  const identifier = parseLinearIssueIdentifier(issueRef);
+  if (!identifier) {
+    console.error("! error: invalid Linear issue reference");
+    console.error("  usage: grog done <linear-issue-url-or-identifier>");
+    console.error("  examples:");
+    console.error("    grog done https://linear.app/workspace/issue/PROJ-123");
+    console.error("    grog done PROJ-123");
+    process.exit(1);
+  }
+
+  try {
+    console.log(`> marking Linear issue ${identifier} as Done...`);
+    const result = await markLinearIssueDone(identifier);
+    console.log("");
+    boxHeader(`${result.issue.identifier}: ${result.issue.title || "Done"}`);
+    console.log("");
+    field(
+      "state",
+      `${result.issue.state?.name || result.targetState.name} (${result.issue.state?.type || result.targetState.type})`,
+    );
+    field("changed", result.changed ? "yes" : "no");
+    field("url", result.issue.url || "");
   } catch (error) {
     console.error("! error:", error.message);
     process.exit(1);
@@ -2242,6 +2375,7 @@ async function main() {
     console.log("    grog explore <url>              list all issues for batch processing (GitHub or Linear)");
     console.log("    grog review <pr-url>            fetch PR details for code review (GitHub only)");
     console.log("    grog answer <url> <file>        post a summary comment (GitHub or Linear)");
+    console.log("    grog done <issue-url|id>        mark a Linear issue as Done");
     console.log("    grog talk                       connect to Telegram for remote interaction");
     console.log("    grog notify <message>           send a quick Telegram notification");
     console.log("");
@@ -2257,6 +2391,7 @@ async function main() {
     console.log("    grog explore https://linear.app/workspace/team/PROJ");
     console.log("    grog explore https://linear.app/workspace");
     console.log("    grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md");
+    console.log("    grog done https://linear.app/workspace/issue/PROJ-123");
     console.log("");
     process.exit(1);
   }
@@ -2299,6 +2434,15 @@ async function main() {
       await handleAnswer(url, summaryFile);
       break;
     }
+
+    case "done":
+      if (!url) {
+        console.error("! error: missing Linear issue URL or identifier");
+        console.log("  usage: grog done <linear-issue-url-or-identifier>");
+        process.exit(1);
+      }
+      await handleDone(url);
+      break;
 
     case "talk":
       await handleTalk();
@@ -2366,7 +2510,7 @@ async function main() {
         await handleExplore(command);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review, answer");
+        console.log("  available: solve, explore, review, answer, done");
         process.exit(1);
       }
   }
