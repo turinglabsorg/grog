@@ -73,6 +73,7 @@ mkdir -p "$SKILLS_DIR/grog-solve"
 mkdir -p "$SKILLS_DIR/grog-explore"
 mkdir -p "$SKILLS_DIR/grog-review"
 mkdir -p "$SKILLS_DIR/grog-answer"
+mkdir -p "$SKILLS_DIR/grog-create"
 mkdir -p "$SKILLS_DIR/grog-talk"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
@@ -586,7 +587,49 @@ EOF
 
 echo "  > /grog-answer skill"
 
-# Skill 5: /grog-talk - Telegram bridge for remote interaction
+# Skill 5: /grog-create - Create a Linear issue
+cat > "$SKILLS_DIR/grog-create/SKILL.md" << 'EOF'
+---
+name: grog-create
+description: Create a Linear issue. Use when the user asks to create/open/file a new Linear issue or asks to create an issue describing completed work.
+allowed-tools: Bash, Read, Write
+argument-hint: linear --team <team-key> --title <title> [--description-file <file>]
+---
+
+# GROG Create - Linear Issue Creator
+
+Create a Linear issue in the workspace configured for the current project. The project must contain a `.grog` file with `workspace=NAME`, and `~/.grog/config.json` must contain `linear.NAME`.
+
+## Usage
+
+When the user asks to create a Linear issue, prepare a concise markdown description and run:
+
+```bash
+node ~/.claude/tools/grog/index.js create linear --team TEAM --title "Issue title" --description-file /tmp/body.md
+```
+
+Supported flags:
+- `--team` / `-t`: Linear team key, required
+- `--title`: issue title, required
+- `--description-file` / `--body-file` / `-f`: markdown body file
+- `--description` / `--body`: inline markdown body
+- `--priority` / `-p`: `none`, `urgent`, `high`, `medium`, `low`, or `0-4`
+
+## Workflow
+
+1. Write the issue description to a temp markdown file.
+2. Run the command above with the correct team key.
+3. Report the created issue identifier and URL from the command output.
+
+## Error Handling
+
+- If no team is specified and the team cannot be inferred, ask for the team key.
+- If the Linear token is missing, tell the user to declare the workspace in `.grog` and configure `~/.grog/config.json`.
+EOF
+
+echo "  > /grog-create skill"
+
+# Skill 6: /grog-talk - Telegram bridge for remote interaction
 cat > "$SKILLS_DIR/grog-talk/SKILL.md" << 'EOF'
 ---
 name: grog-talk
@@ -692,6 +735,7 @@ echo "    /grog-solve <issue-url>     fetch and solve an issue (GitHub or Linear
 echo "    /grog-explore <url>         list all issues for batch processing"
 echo "    /grog-review <pr-url>       review a pull request (GitHub only)"
 echo "    /grog-answer <url>          post a summary comment to an issue or PR"
+echo "    /grog-create linear ...     create a Linear issue"
 echo "    /grog-talk                  connect to Telegram for remote interaction"
 echo ""
 echo "  github examples:"
@@ -705,6 +749,7 @@ echo "  linear examples:"
 echo "    /grog-solve https://linear.app/workspace/issue/PROJ-123"
 echo "    /grog-explore https://linear.app/workspace/team/PROJ"
 echo "    /grog-explore https://linear.app/workspace"
+echo "    /grog-create linear --team PROJ --title \"Bug title\" --description-file /tmp/body.md"
 echo "    /grog-answer https://linear.app/workspace/issue/PROJ-123"
 echo ""
 echo "    /grog-talk"

@@ -1,6 +1,6 @@
 # Grog — Claude Code Skills
 
-Grog adds five slash commands to Claude Code for working with GitHub issues, pull requests, and remote interaction directly from your terminal.
+Grog adds slash commands to Claude Code for working with GitHub issues, Linear issues, pull requests, and remote interaction directly from your terminal.
 
 ## Skills
 
@@ -19,6 +19,10 @@ Lists all open issues from a repository or GitHub Project, grouped by labels or 
 ### `/grog-answer <issue-or-pr-url>`
 
 Posts a summary comment to a GitHub issue or pull request. Gathers context from your recent work, writes a markdown summary, and posts it directly on the issue or PR. Use after solving or reviewing to share what was done.
+
+### `/grog-create linear --team <team-key> --title <title> [--description-file <file>]`
+
+Creates a Linear issue in the configured workspace. The project must declare the workspace in its `.grog` file, and the Linear API key must be configured in `~/.grog/config.json`.
 
 ### `/grog-talk`
 
@@ -68,6 +72,7 @@ Open any Claude Code session and type:
 /grog-review https://github.com/owner/repo/pull/456
 /grog-explore https://github.com/owner/repo
 /grog-answer https://github.com/owner/repo/issues/123   # or /pull/456
+/grog-create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
 /grog-talk
 ```
 
@@ -111,6 +116,7 @@ Since it runs inside Claude Code, it has full access to your local filesystem, g
 ~/.claude/skills/grog-explore/
 ~/.claude/skills/grog-review/
 ~/.claude/skills/grog-answer/
+~/.claude/skills/grog-create/
 ~/.claude/skills/grog-talk/
 ```
 

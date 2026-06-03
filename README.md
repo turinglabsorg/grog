@@ -26,7 +26,7 @@ grog/
   agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
   api/      - SaaS API server (OAuth, billing, Stripe)
   app/      - SaaS frontend (React)
-  skill/    - Claude Code CLI skills — GitHub + Linear support (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-talk)
+  skill/    - Claude Code CLI skills — GitHub + Linear support (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-create, /grog-talk)
   pm2/      - PM2 ecosystem config for production
 ```
 
@@ -209,12 +209,19 @@ Then in any Claude Code session:
 /grog-solve https://linear.app/workspace/issue/PROJ-123
 /grog-explore https://linear.app/workspace/team/PROJ
 /grog-explore https://linear.app/workspace
+/grog-create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
 /grog-answer https://linear.app/workspace/issue/PROJ-123
 
 /grog-talk
 ```
 
 The same commands work for both platforms — grog auto-detects GitHub vs Linear from the URL.
+
+`/grog-create` currently creates Linear issues through the local workspace selected by the project `.grog` file. Example:
+
+```bash
+node ~/.claude/tools/grog/index.js create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
+```
 
 ### Telegram Bridge
 

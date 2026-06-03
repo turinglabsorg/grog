@@ -437,6 +437,7 @@ async function fetchLinearTeams() {
     query {
       teams {
         nodes {
+          id
           key
           name
           issueCount
@@ -447,6 +448,59 @@ async function fetchLinearTeams() {
 
   const data = await linearGraphQL(query);
   return data.teams?.nodes || [];
+}
+
+async function fetchLinearTeamByKey(teamKey) {
+  const query = `
+    query($teamKey: String!) {
+      teams(filter: { key: { eq: $teamKey } }, first: 1) {
+        nodes {
+          id
+          key
+          name
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(query, { teamKey });
+  const team = data.teams?.nodes?.[0];
+  if (!team) {
+    throw new Error(`Team not found: ${teamKey}`);
+  }
+  return team;
+}
+
+async function createLinearIssue({ teamKey, title, description, priority }) {
+  const team = await fetchLinearTeamByKey(teamKey);
+  const mutation = `
+    mutation($input: IssueCreateInput!) {
+      issueCreate(input: $input) {
+        success
+        issue {
+          id
+          identifier
+          title
+          url
+          state { name type }
+          team { key name }
+        }
+      }
+    }
+  `;
+
+  const input = {
+    teamId: team.id,
+    title,
+    description: description || "",
+  };
+  if (priority != null) input.priority = priority;
+
+  const data = await linearGraphQL(mutation, { input });
+  if (!data.issueCreate?.success) {
+    throw new Error("Failed to create Linear issue");
+  }
+  return data.issueCreate.issue;
 }
 
 /**
@@ -1859,6 +1913,107 @@ async function handleExplore(url) {
   }
 }
 
+function readCliFlag(args, names) {
+  const aliases = Array.isArray(names) ? names : [names];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    for (const name of aliases) {
+      if (arg === name) return args[i + 1];
+      if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1);
+    }
+  }
+  return undefined;
+}
+
+function parseLinearPriority(value) {
+  if (!value) return undefined;
+  const normalized = String(value).trim().toLowerCase();
+  const priorities = {
+    none: 0,
+    urgent: 1,
+    high: 2,
+    medium: 3,
+    low: 4,
+  };
+  if (Object.prototype.hasOwnProperty.call(priorities, normalized)) {
+    return priorities[normalized];
+  }
+
+  const numeric = Number(normalized);
+  if (Number.isInteger(numeric) && numeric >= 0 && numeric <= 4) {
+    return numeric;
+  }
+
+  throw new Error(
+    `Invalid Linear priority "${value}". Use none, urgent, high, medium, low, or 0-4.`,
+  );
+}
+
+async function handleCreate(args) {
+  const target = args[0] === "linear" ? "linear" : null;
+  const createArgs = target ? args.slice(1) : args;
+
+  if (target !== "linear") {
+    console.error("! error: missing create target");
+    console.error("  usage: grog create linear --team TEAM --title \"Title\" [--description-file /tmp/body.md]");
+    process.exit(1);
+  }
+
+  const teamKey = readCliFlag(createArgs, ["--team", "-t"]);
+  const title = readCliFlag(createArgs, ["--title"]);
+  const description = readCliFlag(createArgs, ["--description", "--body"]) || "";
+  const descriptionFile = readCliFlag(createArgs, [
+    "--description-file",
+    "--body-file",
+    "-f",
+  ]);
+  let priority;
+  try {
+    priority = parseLinearPriority(readCliFlag(createArgs, ["--priority", "-p"]));
+  } catch (err) {
+    console.error(`! error: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (!teamKey) {
+    console.error("! error: missing Linear team key");
+    console.error("  usage: grog create linear --team TEAM --title \"Title\"");
+    process.exit(1);
+  }
+  if (!title) {
+    console.error("! error: missing Linear issue title");
+    console.error("  usage: grog create linear --team TEAM --title \"Title\"");
+    process.exit(1);
+  }
+
+  let body = description;
+  if (descriptionFile) {
+    try {
+      body = readFileSync(descriptionFile, "utf-8");
+    } catch (err) {
+      console.error(`! error: could not read description file: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
+  requireLinearToken();
+
+  try {
+    console.log(`> creating Linear issue in team ${teamKey}...`);
+    const issue = await createLinearIssue({
+      teamKey,
+      title,
+      description: body.trim(),
+      priority,
+    });
+    console.log(`> issue created: ${issue.identifier} ${issue.title}`);
+    console.log(`> ${issue.url}`);
+  } catch (error) {
+    console.error("! error:", error.message);
+    process.exit(1);
+  }
+}
+
 /**
  * Handle 'answer' command - post a summary comment to a GitHub issue/PR or Linear issue
  */
@@ -2375,6 +2530,7 @@ async function main() {
     console.log("    grog explore <url>              list all issues for batch processing (GitHub or Linear)");
     console.log("    grog review <pr-url>            fetch PR details for code review (GitHub only)");
     console.log("    grog answer <url> <file>        post a summary comment (GitHub or Linear)");
+    console.log("    grog create linear --team TEAM --title \"Title\" [--description-file file]");
     console.log("    grog done <issue-url|id>        mark a Linear issue as Done");
     console.log("    grog talk                       connect to Telegram for remote interaction");
     console.log("    grog notify <message>           send a quick Telegram notification");
@@ -2390,6 +2546,7 @@ async function main() {
     console.log("    grog solve https://linear.app/workspace/issue/PROJ-123");
     console.log("    grog explore https://linear.app/workspace/team/PROJ");
     console.log("    grog explore https://linear.app/workspace");
+    console.log("    grog create linear --team PROJ --title \"Bug title\" --description-file /tmp/body.md");
     console.log("    grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md");
     console.log("    grog done https://linear.app/workspace/issue/PROJ-123");
     console.log("");
@@ -2432,6 +2589,17 @@ async function main() {
         process.exit(1);
       }
       await handleAnswer(url, summaryFile);
+      break;
+    }
+
+    case "create": {
+      const createArgs = process.argv.slice(3);
+      if (createArgs.length === 0) {
+        console.error("! error: missing create target");
+        console.log("  usage: grog create linear --team TEAM --title \"Title\" [--description-file file]");
+        process.exit(1);
+      }
+      await handleCreate(createArgs);
       break;
     }
 
@@ -2510,7 +2678,7 @@ async function main() {
         await handleExplore(command);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review, answer, done");
+        console.log("  available: solve, explore, review, answer, create, done");
         process.exit(1);
       }
   }
