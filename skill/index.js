@@ -2,7 +2,7 @@
 
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
 
@@ -576,6 +576,100 @@ async function postLinearComment(issueIdentifier, body) {
   }
 
   return data.commentCreate.comment;
+}
+
+function contentTypeForFile(filePath) {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  throw new Error(`Unsupported image type: ${filePath}`);
+}
+
+async function uploadLinearFile(filePath, { makePublic = true } = {}) {
+  const file = readFileSync(filePath);
+  const contentType = contentTypeForFile(filePath);
+
+  const data = await linearGraphQL(
+    `
+      mutation($filename: String!, $contentType: String!, $size: Int!, $makePublic: Boolean) {
+        fileUpload(filename: $filename, contentType: $contentType, size: $size, makePublic: $makePublic) {
+          success
+          uploadFile {
+            filename
+            contentType
+            size
+            uploadUrl
+            assetUrl
+            headers { key value }
+          }
+        }
+      }
+    `,
+    {
+      filename: basename(filePath),
+      contentType,
+      size: file.length,
+      makePublic,
+    },
+  );
+
+  const uploadFile = data.fileUpload?.uploadFile;
+  if (!data.fileUpload?.success || !uploadFile?.uploadUrl || !uploadFile?.assetUrl) {
+    throw new Error(`Failed to create Linear upload for ${filePath}`);
+  }
+
+  const headers = {};
+  for (const header of uploadFile.headers || []) {
+    headers[header.key] = header.value;
+  }
+  if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+    headers["Content-Type"] = contentType;
+  }
+
+  const response = await fetch(uploadFile.uploadUrl, {
+    method: "PUT",
+    headers,
+    body: file,
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Failed to upload ${filePath}: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`);
+  }
+
+  return uploadFile.assetUrl;
+}
+
+function parseImageArgs(args) {
+  const imagePaths = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--image" || arg === "-i") {
+      const value = args[++i];
+      if (!value) throw new Error(`${arg} requires a file path`);
+      imagePaths.push(value);
+      continue;
+    }
+    if (arg.startsWith("--image=")) {
+      imagePaths.push(arg.slice("--image=".length));
+      continue;
+    }
+    throw new Error(`Unknown answer option: ${arg}`);
+  }
+  return imagePaths;
+}
+
+async function appendLinearImages(body, imagePaths) {
+  if (imagePaths.length === 0) return body;
+
+  const lines = [body.trim(), "", "Screenshots:"];
+  for (const imagePath of imagePaths) {
+    const assetUrl = await uploadLinearFile(imagePath, { makePublic: true });
+    lines.push(`![${basename(imagePath)}](${assetUrl})`);
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -2017,7 +2111,7 @@ async function handleCreate(args) {
 /**
  * Handle 'answer' command - post a summary comment to a GitHub issue/PR or Linear issue
  */
-async function handleAnswer(issueUrl, summaryFilePath) {
+async function handleAnswer(issueUrl, summaryFilePath, answerArgs = []) {
   if (!summaryFilePath) {
     console.error("! error: missing summary file path");
     console.error("  usage: grog answer <issue-or-pr-url> <path-to-summary-file>");
@@ -2037,6 +2131,14 @@ async function handleAnswer(issueUrl, summaryFilePath) {
     process.exit(1);
   }
 
+  let imagePaths = [];
+  try {
+    imagePaths = parseImageArgs(answerArgs);
+  } catch (error) {
+    console.error("! error:", error.message);
+    process.exit(1);
+  }
+
   const platform = detectPlatform(issueUrl);
 
   if (platform === "linear") {
@@ -2049,6 +2151,10 @@ async function handleAnswer(issueUrl, summaryFilePath) {
     }
 
     try {
+      if (imagePaths.length > 0) {
+        console.log(`> uploading ${imagePaths.length} image(s) to Linear...`);
+        summary = await appendLinearImages(summary, imagePaths);
+      }
       console.log(`> posting comment to Linear issue ${parsed.identifier}...`);
       const comment = await postLinearComment(parsed.identifier, summary);
       console.log(`> comment posted: ${comment.url || "success"}`);
@@ -2057,6 +2163,11 @@ async function handleAnswer(issueUrl, summaryFilePath) {
       process.exit(1);
     }
     return;
+  }
+
+  if (imagePaths.length > 0) {
+    console.error("! error: --image is currently supported only for Linear issues");
+    process.exit(1);
   }
 
   requireGhToken();
@@ -2583,12 +2694,13 @@ async function main() {
 
     case "answer": {
       const summaryFile = process.argv[4];
+      const answerArgs = process.argv.slice(5);
       if (!url) {
         console.error("! error: missing issue URL");
-        console.log("  usage: grog answer <github-issue-url> <path-to-summary-file>");
+        console.log("  usage: grog answer <issue-url> <path-to-summary-file> [--image path]");
         process.exit(1);
       }
-      await handleAnswer(url, summaryFile);
+      await handleAnswer(url, summaryFile, answerArgs);
       break;
     }
 

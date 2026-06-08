@@ -211,6 +211,7 @@ Then in any Claude Code session:
 /grog-explore https://linear.app/workspace
 /grog-create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
 /grog-answer https://linear.app/workspace/issue/PROJ-123
+/grog-answer https://linear.app/workspace/issue/PROJ-123 --image /tmp/screenshot.png
 
 /grog-talk
 ```
@@ -221,6 +222,12 @@ The same commands work for both platforms — grog auto-detects GitHub vs Linear
 
 ```bash
 node ~/.claude/tools/grog/index.js create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
+```
+
+`grog answer` can upload Linear screenshots and append them to the posted comment:
+
+```bash
+node ~/.claude/tools/grog/index.js answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md --image /tmp/screenshot.png
 ```
 
 ### Telegram Bridge

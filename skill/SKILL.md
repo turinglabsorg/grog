@@ -18,7 +18,7 @@ Lists all open issues from a repository or GitHub Project, grouped by labels or 
 
 ### `/grog-answer <issue-or-pr-url>`
 
-Posts a summary comment to a GitHub issue or pull request. Gathers context from your recent work, writes a markdown summary, and posts it directly on the issue or PR. Use after solving or reviewing to share what was done.
+Posts a summary comment to a GitHub issue, GitHub pull request, or Linear issue. For Linear issues, image paths can be uploaded and appended to the posted comment with `--image`.
 
 ### `/grog-create linear --team <team-key> --title <title> [--description-file <file>]`
 
@@ -72,6 +72,7 @@ Open any Claude Code session and type:
 /grog-review https://github.com/owner/repo/pull/456
 /grog-explore https://github.com/owner/repo
 /grog-answer https://github.com/owner/repo/issues/123   # or /pull/456
+/grog-answer https://linear.app/workspace/issue/PROJ-123 --image /tmp/screenshot.png
 /grog-create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
 /grog-talk
 ```

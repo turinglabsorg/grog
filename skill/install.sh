@@ -566,6 +566,10 @@ When the user wants to post a summary or comment to a GitHub issue or PR:
    ```bash
    node ~/.claude/tools/grog/index.js answer $ARGUMENTS "$SUMMARY_FILE"
    ```
+   For Linear screenshots, pass one or more image paths after the summary file:
+   ```bash
+   node ~/.claude/tools/grog/index.js answer $ARGUMENTS "$SUMMARY_FILE" --image /tmp/screenshot.png
+   ```
 4. Report what was posted (include the comment URL from the output)
 
 ## Summary Format
