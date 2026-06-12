@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { basename, dirname, join } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
+import { execFileSync, execSync } from "child_process";
 
 // Load config from ~/.grog/config.json (primary) with .env fallback
 const __filename = fileURLToPath(import.meta.url);
@@ -93,9 +94,65 @@ function resolveLinearApiKey() {
 
 function detectPlatform(url) {
   if (!url) return null;
+  if (url.includes("jam.dev/")) return "jam";
   if (url.includes("linear.app")) return "linear";
   if (url.includes("github.com")) return "github";
   return null;
+}
+
+function parseJamUrl(url) {
+  if (!url) return null;
+  const match = url.match(/^https?:\/\/(?:www\.)?jam\.dev\/c\/([A-Za-z0-9-]+)(?:[/?#].*)?$/);
+  if (!match) return null;
+  return {
+    id: match[1],
+    url: `https://jam.dev/c/${match[1]}`,
+  };
+}
+
+function decodeHtmlEntities(value = "") {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, "/");
+}
+
+function extractMetaContent(html, property) {
+  const patterns = [
+    new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']*)["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+property=["']${property}["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+name=["']${property}["'][^>]+content=["']([^"']*)["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+name=["']${property}["'][^>]*>`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return decodeHtmlEntities(match[1].trim());
+  }
+  return "";
+}
+
+function extractTitle(html) {
+  const ogTitle = extractMetaContent(html, "og:title");
+  if (ogTitle) return ogTitle;
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim();
+  return title ? decodeHtmlEntities(title) : "";
+}
+
+function extractJamAssets(html) {
+  const assets = new Set();
+  const assetPattern = /https?:\/\/[^"'\\\s<>]+(?:\.png|\.jpe?g|\.webp|\.gif|\.mp4|\.webm)(?:\?[^"'\\\s<>]*)?/gi;
+  for (const match of html.matchAll(assetPattern)) {
+    assets.add(match[0]);
+  }
+  const ogImage = extractMetaContent(html, "og:image");
+  if (ogImage) assets.add(ogImage);
+  const ogVideo = extractMetaContent(html, "og:video");
+  if (ogVideo) assets.add(ogVideo);
+  return Array.from(assets);
 }
 
 function requireGhToken() {
@@ -2207,6 +2264,208 @@ async function handleCreate(args) {
   }
 }
 
+// ─────────────────────────────────────────────────────────
+// Jam.dev Viewer
+// ─────────────────────────────────────────────────────────
+
+function hasFlag(args, flag) {
+  return args.includes(flag);
+}
+
+function getFlagValue(args, flag) {
+  const index = args.indexOf(flag);
+  if (index === -1) return undefined;
+  return args[index + 1];
+}
+
+function getOptionalFlagValue(args, flag) {
+  const index = args.indexOf(flag);
+  if (index === -1) return undefined;
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) return "";
+  return value;
+}
+
+function openUrlInBrowser(url) {
+  if (process.platform === "darwin") {
+    execFileSync("open", [url], { stdio: "ignore" });
+    return;
+  }
+  if (process.platform === "win32") {
+    execFileSync("cmd", ["/c", "start", "", url], { stdio: "ignore" });
+    return;
+  }
+  execFileSync("xdg-open", [url], { stdio: "ignore" });
+}
+
+function findChromeExecutable() {
+  const candidates = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
+function captureJamScreenshot(url, outputPath) {
+  const chrome = findChromeExecutable();
+  if (!chrome) {
+    throw new Error("Chrome/Chromium executable not found");
+  }
+  const userDataDir = `/tmp/grog-jam-chrome-${Date.now()}`;
+  execFileSync(
+    chrome,
+    [
+      "--headless=new",
+      "--disable-gpu",
+      "--hide-scrollbars",
+      "--no-first-run",
+      `--user-data-dir=${userDataDir}`,
+      "--window-size=1440,1400",
+      `--screenshot=${outputPath}`,
+      url,
+    ],
+    { stdio: "ignore" },
+  );
+}
+
+async function fetchJamHtml(url) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+    },
+    redirect: "follow",
+  });
+  const body = await response.text();
+  return {
+    body,
+    contentType: response.headers.get("content-type") || "",
+    finalUrl: response.url,
+    status: response.status,
+  };
+}
+
+async function handleJam(args) {
+  const urlArg = args.find((arg) => !arg.startsWith("--"));
+  const parsed = parseJamUrl(urlArg || "");
+
+  if (!parsed) {
+    console.error("! error: missing or invalid Jam URL");
+    console.log("  usage: grog jam https://jam.dev/c/<id> [--open] [--telegram] [--json] [--save file] [--screenshot [file]]");
+    process.exit(1);
+  }
+
+  const shouldOpen = hasFlag(args, "--open");
+  const shouldSendTelegram = hasFlag(args, "--telegram");
+  const shouldPrintJson = hasFlag(args, "--json");
+  const shouldSkipScreenshot = hasFlag(args, "--no-screenshot");
+  const savePath = getFlagValue(args, "--save");
+  const screenshotFlagValue = getOptionalFlagValue(args, "--screenshot");
+  const shouldCaptureScreenshot =
+    !shouldSkipScreenshot && (shouldSendTelegram || screenshotFlagValue !== undefined);
+  const screenshotPath = shouldCaptureScreenshot
+    ? screenshotFlagValue || `/tmp/grog-jam-${parsed.id}.png`
+    : undefined;
+
+  const result = {
+    id: parsed.id,
+    url: parsed.url,
+    status: null,
+    finalUrl: null,
+    title: "",
+    description: "",
+    image: "",
+    assets: [],
+    readable: false,
+    opened: false,
+    screenshotPath: "",
+    note: "",
+  };
+
+  try {
+    const fetched = await fetchJamHtml(parsed.url);
+    result.status = fetched.status;
+    result.finalUrl = fetched.finalUrl;
+
+    if (fetched.body.length > 0) {
+      result.readable = true;
+      result.title = extractTitle(fetched.body);
+      result.description =
+        extractMetaContent(fetched.body, "og:description") ||
+        extractMetaContent(fetched.body, "description");
+      result.image = extractMetaContent(fetched.body, "og:image");
+      result.assets = extractJamAssets(fetched.body).slice(0, 12);
+    } else {
+      result.note =
+        "Jam returned an empty HTML body to the CLI. Open it in an authenticated browser with --open.";
+    }
+  } catch (error) {
+    result.note = `Could not fetch Jam page: ${error.message}`;
+  }
+
+  if (shouldOpen) {
+    try {
+      openUrlInBrowser(parsed.url);
+      result.opened = true;
+    } catch (error) {
+      result.note = result.note
+        ? `${result.note} Browser open failed: ${error.message}`
+        : `Browser open failed: ${error.message}`;
+    }
+  }
+
+  if (screenshotPath) {
+    try {
+      captureJamScreenshot(parsed.url, screenshotPath);
+      result.screenshotPath = screenshotPath;
+    } catch (error) {
+      result.note = result.note
+        ? `${result.note} Screenshot failed: ${error.message}`
+        : `Screenshot failed: ${error.message}`;
+    }
+  }
+
+  if (shouldPrintJson) {
+    const output = JSON.stringify(result, null, 2);
+    console.log(output);
+    if (savePath) writeFileSync(savePath, `${output}\n`);
+    if (shouldSendTelegram) await handleTelegramSend([output]);
+    return;
+  }
+
+  const lines = [
+    `Jam: ${result.url}`,
+    `ID: ${result.id}`,
+    result.status ? `HTTP: ${result.status}` : null,
+    result.title ? `Title: ${result.title}` : null,
+    result.description ? `Description: ${result.description}` : null,
+    result.image ? `Image: ${result.image}` : null,
+    result.assets.length > 0
+      ? `Assets:\n${result.assets.map((asset) => `- ${asset}`).join("\n")}`
+      : null,
+    result.note ? `Note: ${result.note}` : null,
+    result.screenshotPath ? `Screenshot: ${result.screenshotPath}` : null,
+    result.opened ? "Opened in browser." : null,
+  ].filter(Boolean);
+
+  const summary = lines.join("\n");
+  console.log(summary);
+  if (savePath) writeFileSync(savePath, `${summary}\n`);
+  if (shouldSendTelegram) {
+    await handleTelegramSend([summary]);
+    if (result.screenshotPath) {
+      await handleTelegramSendImage([
+        result.screenshotPath,
+        `Jam ${result.id}`,
+      ]);
+    }
+  }
+}
+
 /**
  * Handle 'answer' command - post a summary comment to a GitHub issue/PR or Linear issue
  */
@@ -2454,7 +2713,8 @@ async function handleTelegramSend(args) {
  * Usage: grog telegram-send-image <image-path> [caption]
  */
 async function handleTelegramSendImage(args) {
-  const chatId = TELEGRAM_CHAT_ID;
+  const state = loadTelegramState();
+  const chatId = state.chatId || TELEGRAM_CHAT_ID;
 
   if (!chatId) {
     console.error("! error: TELEGRAM_CHAT_ID not set in .env");
@@ -2479,8 +2739,6 @@ async function handleTelegramSendImage(args) {
     console.error(`! error: file not found: ${imagePath}`);
     process.exit(1);
   }
-
-  const { execSync } = await import("child_process");
 
   const captionArg = caption ? `-F "caption=${caption}"` : "";
 
@@ -2741,6 +2999,7 @@ async function main() {
     console.log("    grog review <pr-url>            fetch PR details for code review (GitHub only)");
     console.log("    grog answer <url> <file>        post a summary comment (GitHub or Linear)");
     console.log("    grog create linear --team TEAM --title \"Title\" [--description-file file]");
+    console.log("    grog jam <jam-url>              inspect/open a Jam.dev report");
     console.log("    grog start <issue-url|id>       mark a Linear issue as In Progress");
     console.log("    grog done <issue-url|id>        mark a Linear issue as Done");
     console.log("    grog talk                       connect to Telegram for remote interaction");
@@ -2761,6 +3020,12 @@ async function main() {
     console.log("    grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md");
     console.log("    grog start https://linear.app/workspace/issue/PROJ-123");
     console.log("    grog done https://linear.app/workspace/issue/PROJ-123");
+    console.log("");
+    console.log("  jam examples:");
+    console.log("    grog jam https://jam.dev/c/abcd-1234");
+    console.log("    grog jam https://jam.dev/c/abcd-1234 --screenshot");
+    console.log("    grog jam https://jam.dev/c/abcd-1234 --open");
+    console.log("    grog jam https://jam.dev/c/abcd-1234 --telegram");
     console.log("");
     process.exit(1);
   }
@@ -2813,6 +3078,17 @@ async function main() {
         process.exit(1);
       }
       await handleCreate(createArgs);
+      break;
+    }
+
+    case "jam": {
+      const jamArgs = process.argv.slice(3);
+      if (jamArgs.length === 0) {
+        console.error("! error: missing Jam URL");
+        console.log("  usage: grog jam https://jam.dev/c/<id> [--open] [--telegram] [--json] [--screenshot [file]]");
+        process.exit(1);
+      }
+      await handleJam(jamArgs);
       break;
     }
 
@@ -2898,9 +3174,11 @@ async function main() {
         await handleReview(command);
       } else if (command.includes("github.com")) {
         await handleExplore(command);
+      } else if (command.includes("jam.dev/")) {
+        await handleJam([command]);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review, answer, create, start, done");
+        console.log("  available: solve, explore, review, answer, create, jam, start, done");
         process.exit(1);
       }
   }

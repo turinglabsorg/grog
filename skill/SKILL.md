@@ -159,3 +159,16 @@ node ~/.claude/tools/grog/index.js telegram-send-image /path/to/image.png "Optio
 ```
 
 This command sends images using the Telegram Bot API `sendPhoto` method, supporting any image format.
+
+## Jam.dev Reports
+
+To inspect a Jam report, open it locally, capture a screenshot, or forward it to Telegram:
+
+```bash
+node ~/.claude/tools/grog/index.js jam https://jam.dev/c/<id>
+node ~/.claude/tools/grog/index.js jam https://jam.dev/c/<id> --screenshot
+node ~/.claude/tools/grog/index.js jam https://jam.dev/c/<id> --open
+node ~/.claude/tools/grog/index.js jam https://jam.dev/c/<id> --telegram
+```
+
+Use `--json` for structured output and `--save /path/to/file` to write the summary or JSON to disk.
