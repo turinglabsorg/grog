@@ -792,6 +792,14 @@ async function appendLinearImages(body, imagePaths) {
   return lines.join("\n");
 }
 
+async function fetchLinearImageAsset(url) {
+  const headers = {};
+  if (url.includes("uploads.linear.app")) {
+    headers.Authorization = requireLinearToken().key;
+  }
+  return fetch(url, { headers });
+}
+
 /**
  * Print Linear issue details
  */
@@ -875,7 +883,7 @@ async function printLinearIssueDetails(issue) {
     for (let i = 0; i < imageUrls.length; i++) {
       try {
         const tempPath = join(outputDir, `temp-${Date.now()}-${i}`);
-        const response = await fetch(imageUrls[i]);
+        const response = await fetchLinearImageAsset(imageUrls[i]);
         if (!response.ok) throw new Error(`${response.status}`);
         const buffer = await response.arrayBuffer();
         const contentType = response.headers.get("content-type") || "";
