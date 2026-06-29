@@ -22,6 +22,13 @@ function loadGrogConfig() {
   }
 }
 
+function saveGrogConfig(nextConfig) {
+  mkdirSync(dirname(GROG_CONFIG_PATH), { recursive: true });
+  const tmpPath = `${GROG_CONFIG_PATH}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(nextConfig, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmpPath, GROG_CONFIG_PATH);
+}
+
 const grogConfig = loadGrogConfig();
 
 // Config precedence: ~/.grog/config.json > .env > process.env
@@ -29,6 +36,280 @@ const GH_TOKEN = grogConfig.ghToken || process.env.GH_TOKEN;
 const TELEGRAM_BOT_TOKEN = grogConfig.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = grogConfig.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_STATE_FILE = "/tmp/grog-telegram-state.json";
+const TELEGRAM_DOWNLOAD_DIR = "/tmp/grog-telegram-files";
+
+// Zernio (WhatsApp) bridge config — https://zernio.com/api
+const ZERNIO_API_KEY = grogConfig.zernio?.apiKey || process.env.ZERNIO_API_KEY;
+const ZERNIO_WA_ACCOUNT_ID =
+  grogConfig.zernio?.whatsappAccountId || process.env.ZERNIO_WA_ACCOUNT_ID;
+// Optional: pin the bridge to a specific recipient phone (international digits).
+const ZERNIO_WA_PARTICIPANT =
+  grogConfig.zernio?.whatsappParticipantId || process.env.ZERNIO_WA_PARTICIPANT;
+// Optional: template used by `notify` to re-engage outside the 24h window.
+const ZERNIO_WA_TEMPLATE = grogConfig.zernio?.whatsappTemplate || {
+  name: "robin_message_it",
+  language: "it",
+};
+const ZERNIO_BASE = "https://zernio.com/api/v1";
+const WHATSAPP_STATE_FILE = "/tmp/grog-whatsapp-state.json";
+
+// Which channel the generic talk/recv/send/notify commands use.
+// Precedence: --whatsapp/--telegram flag (handled in main) > GROG_CHANNEL env >
+// config.channel > "telegram" (backward compatible default).
+const GROG_CHANNEL = (
+  process.env.GROG_CHANNEL ||
+  grogConfig.channel ||
+  "telegram"
+).toLowerCase();
+
+function normalizeContactKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function getAddressBook(configValue = grogConfig) {
+  const book = configValue.addressBook || configValue.contacts || {};
+  return book && typeof book === "object" && !Array.isArray(book) ? book : {};
+}
+
+function findAddressBookContact(alias, configValue = grogConfig) {
+  const key = normalizeContactKey(alias);
+  if (!key) return null;
+  const book = getAddressBook(configValue);
+  if (book[key]) return { key, contact: book[key] };
+  const match = Object.entries(book).find(([candidate]) => normalizeContactKey(candidate) === key);
+  return match ? { key: match[0], contact: match[1] } : null;
+}
+
+function getContactChannel(contact, channel) {
+  if (!contact || typeof contact !== "object") return null;
+  if (channel === "whatsapp") return contact.whatsapp || contact.whatsappPhone || contact.phone || null;
+  if (channel === "telegram") return contact.telegram || contact.telegramChatId || contact.chatId || null;
+  return null;
+}
+
+function resolveAddressBookTarget(channel, recipient) {
+  if (!recipient) return null;
+
+  const match = findAddressBookContact(recipient);
+  if (match) {
+    const value = getContactChannel(match.contact, channel);
+    if (!value) {
+      console.error(`! error: contact "${match.key}" has no ${channel} destination`);
+      process.exit(1);
+    }
+    return {
+      label: match.key,
+      value: channel === "whatsapp" ? normalizePhone(value) : String(value),
+      fromAddressBook: true,
+    };
+  }
+
+  if (channel === "whatsapp") {
+    const digits = normalizePhone(recipient);
+    if (digits.length >= 6) {
+      return { label: recipient, value: digits, fromAddressBook: false };
+    }
+  }
+
+  if (channel === "telegram" && /^-?\d+$/.test(String(recipient).trim())) {
+    return { label: recipient, value: String(recipient).trim(), fromAddressBook: false };
+  }
+
+  console.error(`! error: unknown contact "${recipient}"`);
+  console.error("  save it with: grog contacts save <alias> --whatsapp <phone> --telegram <chat-id>");
+  process.exit(1);
+}
+
+function parseRecipientArgs(args) {
+  const rest = [];
+  let to = null;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--to" || arg === "--contact" || arg === "--recipient") {
+      to = args[++i];
+      if (!to) {
+        console.error(`! error: ${arg} requires a contact alias or destination`);
+        process.exit(1);
+      }
+    } else if (arg.startsWith("--to=")) {
+      to = arg.slice("--to=".length);
+    } else if (arg.startsWith("--contact=")) {
+      to = arg.slice("--contact=".length);
+    } else if (arg.startsWith("--recipient=")) {
+      to = arg.slice("--recipient=".length);
+    } else {
+      rest.push(arg);
+    }
+  }
+
+  return { to, rest };
+}
+
+function readMessageFromArgs(args) {
+  if (args.length === 1 && existsSync(args[0])) {
+    return readFileSync(args[0], "utf-8").trim();
+  }
+  return args.join(" ");
+}
+
+function sanitizeTelegramFileName(value) {
+  const name = basename(String(value || "telegram-file")).replace(/[^a-zA-Z0-9._-]/g, "_");
+  return name || "telegram-file";
+}
+
+function isTelegramTextDocument(document) {
+  const name = String(document?.file_name || "").toLowerCase();
+  const mime = String(document?.mime_type || "").toLowerCase();
+  if (mime.startsWith("text/")) return true;
+  if (["application/json", "application/xml", "application/x-yaml"].includes(mime)) return true;
+  return [
+    ".md",
+    ".markdown",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".tsv",
+    ".log",
+  ].some((suffix) => name.endsWith(suffix));
+}
+
+function parseContactFields(args) {
+  const rest = [];
+  const fields = {};
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const readValue = (flag) => {
+      const value = args[++i];
+      if (!value) {
+        console.error(`! error: ${flag} requires a value`);
+        process.exit(1);
+      }
+      return value;
+    };
+
+    if (arg === "--name") fields.name = readValue(arg);
+    else if (arg.startsWith("--name=")) fields.name = arg.slice("--name=".length);
+    else if (arg === "--whatsapp" || arg === "--wa" || arg === "--phone") {
+      fields.whatsapp = normalizePhone(readValue(arg));
+    } else if (arg.startsWith("--whatsapp=")) {
+      fields.whatsapp = normalizePhone(arg.slice("--whatsapp=".length));
+    } else if (arg.startsWith("--wa=")) {
+      fields.whatsapp = normalizePhone(arg.slice("--wa=".length));
+    } else if (arg.startsWith("--phone=")) {
+      fields.whatsapp = normalizePhone(arg.slice("--phone=".length));
+    } else if (arg === "--telegram" || arg === "--tg" || arg === "--chat-id") {
+      fields.telegram = String(readValue(arg)).trim();
+    } else if (arg.startsWith("--telegram=")) {
+      fields.telegram = arg.slice("--telegram=".length).trim();
+    } else if (arg.startsWith("--tg=")) {
+      fields.telegram = arg.slice("--tg=".length).trim();
+    } else if (arg.startsWith("--chat-id=")) {
+      fields.telegram = arg.slice("--chat-id=".length).trim();
+    } else {
+      rest.push(arg);
+    }
+  }
+
+  return { fields, rest };
+}
+
+function printContact(alias, contact) {
+  const parts = [];
+  const whatsapp = getContactChannel(contact, "whatsapp");
+  const telegram = getContactChannel(contact, "telegram");
+  if (whatsapp) parts.push(`whatsapp=${normalizePhone(whatsapp)}`);
+  if (telegram) parts.push(`telegram=${telegram}`);
+  const name = contact?.name ? ` (${contact.name})` : "";
+  console.log(`- ${alias}${name}: ${parts.join(", ") || "(no channels)"}`);
+}
+
+async function handleContacts(args) {
+  const action = args[0] || "list";
+
+  if (action === "list" || action === "ls") {
+    const book = getAddressBook();
+    const entries = Object.entries(book).sort(([a], [b]) => a.localeCompare(b));
+    if (entries.length === 0) {
+      console.log("> no contacts saved");
+      return;
+    }
+    for (const [alias, contact] of entries) printContact(alias, contact);
+    return;
+  }
+
+  if (action === "get" || action === "show") {
+    const alias = args[1];
+    if (!alias) {
+      console.error("! error: missing contact alias");
+      console.log("  usage: grog contacts get <alias>");
+      process.exit(1);
+    }
+    const match = findAddressBookContact(alias);
+    if (!match) {
+      console.error(`! error: contact "${alias}" not found`);
+      process.exit(1);
+    }
+    printContact(match.key, match.contact);
+    return;
+  }
+
+  if (action === "save" || action === "set" || action === "add") {
+    const alias = args[1];
+    if (!alias) {
+      console.error("! error: missing contact alias");
+      console.log("  usage: grog contacts save <alias> [--name NAME] [--whatsapp PHONE] [--telegram CHAT_ID]");
+      process.exit(1);
+    }
+    const { fields } = parseContactFields(args.slice(2));
+    if (Object.keys(fields).length === 0) {
+      console.error("! error: missing contact fields");
+      console.log("  usage: grog contacts save <alias> [--name NAME] [--whatsapp PHONE] [--telegram CHAT_ID]");
+      process.exit(1);
+    }
+
+    const key = normalizeContactKey(alias);
+    const nextConfig = loadGrogConfig();
+    const book = { ...getAddressBook(nextConfig) };
+    book[key] = { ...(book[key] || {}), ...fields };
+    nextConfig.addressBook = book;
+    saveGrogConfig(nextConfig);
+    console.log(`> saved contact ${key}`);
+    return;
+  }
+
+  if (action === "remove" || action === "rm" || action === "delete") {
+    const alias = args[1];
+    if (!alias) {
+      console.error("! error: missing contact alias");
+      console.log("  usage: grog contacts remove <alias>");
+      process.exit(1);
+    }
+    const key = normalizeContactKey(alias);
+    const nextConfig = loadGrogConfig();
+    const book = { ...getAddressBook(nextConfig) };
+    if (!book[key]) {
+      console.error(`! error: contact "${alias}" not found`);
+      process.exit(1);
+    }
+    delete book[key];
+    nextConfig.addressBook = book;
+    saveGrogConfig(nextConfig);
+    console.log(`> removed contact ${key}`);
+    return;
+  }
+
+  console.error(`! error: unknown contacts action "${action}"`);
+  console.log("  usage: grog contacts [list|get|save|remove] ...");
+  process.exit(1);
+}
 
 /**
  * Locate the nearest `.grog` file walking upward from cwd.
@@ -258,7 +539,7 @@ function parseGitHubUrl(url) {
  * @returns {{ workspace: string, identifier: string } | null}
  */
 function parseLinearIssueUrl(url) {
-  const match = url.match(/linear\.app\/([^/]+)\/issue\/([A-Z]+-\d+)/);
+  const match = url.match(/linear\.app\/([^/]+)\/issue\/([A-Z0-9]+-\d+)/);
   if (!match) return null;
   return { workspace: match[1], identifier: match[2] };
 }
@@ -266,7 +547,7 @@ function parseLinearIssueUrl(url) {
 function parseLinearIssueIdentifier(ref) {
   const parsed = parseLinearIssueUrl(ref);
   if (parsed) return parsed.identifier;
-  if (/^[A-Z]+-\d+$/.test(ref)) return ref;
+  if (/^[A-Z0-9]+-\d+$/.test(ref)) return ref;
   return null;
 }
 
@@ -705,6 +986,15 @@ function contentTypeForFile(filePath) {
   if (lower.endsWith(".gif")) return "image/gif";
   if (lower.endsWith(".webp")) return "image/webp";
   throw new Error(`Unsupported image type: ${filePath}`);
+}
+
+function isSupportedImagePath(filePath) {
+  if (!filePath || !existsSync(filePath)) return false;
+  try {
+    return contentTypeForFile(filePath).startsWith("image/");
+  } catch {
+    return false;
+  }
 }
 
 async function uploadLinearFile(filePath, { makePublic = true } = {}) {
@@ -2605,6 +2895,76 @@ async function telegramApi(method, params = {}) {
   return data.result;
 }
 
+async function downloadTelegramFile(fileId, fileName) {
+  const file = await telegramApi("getFile", { file_id: fileId });
+  if (!file?.file_path) {
+    throw new Error("Telegram did not return a downloadable file path");
+  }
+
+  mkdirSync(TELEGRAM_DOWNLOAD_DIR, { recursive: true });
+
+  const safeName = sanitizeTelegramFileName(fileName || basename(file.file_path));
+  const localPath = join(TELEGRAM_DOWNLOAD_DIR, `${Date.now()}-${safeName}`);
+  const url = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Telegram file download failed: ${response.status} ${response.statusText}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  writeFileSync(localPath, buffer);
+
+  return localPath;
+}
+
+async function downloadTelegramDocument(document) {
+  return downloadTelegramFile(document.file_id, document.file_name);
+}
+
+async function formatTelegramMessage(update) {
+  if (update.callback_query) {
+    telegramApi("answerCallbackQuery", { callback_query_id: update.callback_query.id }).catch(() => {});
+    return update.callback_query.data;
+  }
+
+  const message = update.message;
+  if (!message) return "";
+  if (message.text) return message.text;
+
+  const parts = [];
+  if (message.caption) parts.push(message.caption);
+
+  if (message.document) {
+    const localPath = await downloadTelegramDocument(message.document);
+    const fileName = message.document.file_name || basename(localPath);
+    parts.push(`file: ${fileName}`);
+    parts.push(`saved: ${localPath}`);
+
+    if (isTelegramTextDocument(message.document)) {
+      parts.push("--- file content ---");
+      parts.push(readFileSync(localPath, "utf-8"));
+      parts.push("--- end file content ---");
+    } else {
+      parts.push("[telegram document saved]");
+    }
+
+    return parts.join("\n");
+  }
+
+  if (message.photo?.length) {
+    const photo = message.photo[message.photo.length - 1];
+    const localPath = await downloadTelegramFile(photo.file_id, `${photo.file_unique_id || photo.file_id}.jpg`);
+    return [
+      ...parts,
+      "photo: telegram-photo.jpg",
+      `saved: ${localPath}`,
+    ].filter(Boolean).join("\n");
+  }
+
+  return [...parts, "[non-text message]"].filter(Boolean).join("\n");
+}
+
 function loadTelegramState() {
   try {
     return JSON.parse(readFileSync(TELEGRAM_STATE_FILE, "utf-8"));
@@ -2671,7 +3031,7 @@ async function handleTalk() {
   // Send welcome message
   await telegramApi("sendMessage", {
     chat_id: chatId,
-    text: "Grog is online.\n\nSend messages here — they will be processed by Claude Code.\n\nSend \"bye\" to disconnect.",
+    text: 'Grog is online.\n\nSend messages here — they will be processed by the active agent session.\n\nSend "bye" to disconnect.',
   });
 
   console.log("> grog talk is active");
@@ -2683,20 +3043,17 @@ async function handleTalk() {
  * Send a message to Telegram — accepts a file path or direct text
  */
 async function handleTelegramSend(args) {
+  const { to, rest } = parseRecipientArgs(args);
   const state = loadTelegramState();
-  const chatId = state.chatId || TELEGRAM_CHAT_ID;
+  const target = to ? resolveAddressBookTarget("telegram", to) : null;
+  const chatId = target?.value || state.chatId || TELEGRAM_CHAT_ID;
 
   if (!chatId) {
     console.error('! error: no chat ID — run "grog talk" first');
     process.exit(1);
   }
 
-  let message;
-  if (args.length === 1 && existsSync(args[0])) {
-    message = readFileSync(args[0], "utf-8").trim();
-  } else {
-    message = args.join(" ");
-  }
+  const message = readMessageFromArgs(rest);
 
   if (!message) {
     console.error("! error: empty message");
@@ -2713,7 +3070,7 @@ async function handleTelegramSend(args) {
     await telegramApi("sendMessage", { chat_id: chatId, text: chunk });
   }
 
-  console.log("> sent to Telegram");
+  console.log(`> sent to Telegram${target ? ` (${target.label})` : ""}`);
 }
 
 /**
@@ -2721,8 +3078,10 @@ async function handleTelegramSend(args) {
  * Usage: grog telegram-send-image <image-path> [caption]
  */
 async function handleTelegramSendImage(args) {
+  const { to, rest } = parseRecipientArgs(args);
   const state = loadTelegramState();
-  const chatId = state.chatId || TELEGRAM_CHAT_ID;
+  const target = to ? resolveAddressBookTarget("telegram", to) : null;
+  const chatId = target?.value || state.chatId || TELEGRAM_CHAT_ID;
 
   if (!chatId) {
     console.error("! error: TELEGRAM_CHAT_ID not set in .env");
@@ -2734,8 +3093,8 @@ async function handleTelegramSendImage(args) {
     process.exit(1);
   }
 
-  const imagePath = args[0];
-  const caption = args.slice(1).join(" ");
+  const imagePath = rest[0];
+  const caption = rest.slice(1).join(" ");
 
   if (!imagePath) {
     console.error("! error: missing image path");
@@ -2760,7 +3119,7 @@ async function handleTelegramSendImage(args) {
       process.exit(1);
     }
 
-    console.log("> image sent to Telegram");
+    console.log(`> image sent to Telegram${target ? ` (${target.label})` : ""}`);
   } catch (err) {
     console.error(`! error: failed to send image: ${err.message}`);
     process.exit(1);
@@ -2773,7 +3132,9 @@ async function handleTelegramSendImage(args) {
  * telegram-recv can work afterwards without running 'talk' first.
  */
 async function handleNotify(args) {
-  const chatId = TELEGRAM_CHAT_ID;
+  const { to, rest } = parseRecipientArgs(args);
+  const target = to ? resolveAddressBookTarget("telegram", to) : null;
+  const chatId = target?.value || TELEGRAM_CHAT_ID;
 
   if (!chatId) {
     console.error("! error: TELEGRAM_CHAT_ID not set in .env");
@@ -2781,7 +3142,7 @@ async function handleNotify(args) {
     process.exit(1);
   }
 
-  const message = args.join(" ");
+  const message = rest.join(" ");
   if (!message) {
     console.error("! error: empty message");
     process.exit(1);
@@ -2807,7 +3168,7 @@ async function handleNotify(args) {
     await telegramApi("sendMessage", { chat_id: chatId, text: chunk });
   }
 
-  console.log("> notified via Telegram");
+  console.log(`> notified via Telegram${target ? ` (${target.label})` : ""}`);
 }
 
 /**
@@ -2973,21 +3334,465 @@ async function handleTelegramRecv() {
     }
 
     if (messages.length > 0) {
-      const texts = messages
-        .map((u) => {
-          if (u.callback_query) {
-            telegramApi("answerCallbackQuery", { callback_query_id: u.callback_query.id }).catch(() => {});
-            return u.callback_query.data;
-          }
-          return u.message.text || "[non-text message]";
-        })
-        .join("\n");
+      const texts = (await Promise.all(messages.map(formatTelegramMessage))).join("\n");
       console.log(texts);
       return;
     }
   }
 
   console.log("[no message]");
+}
+
+// ─────────────────────────────────────────────────────────
+// WhatsApp Bridge (via Zernio — https://zernio.com/api)
+// ─────────────────────────────────────────────────────────
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function zernioApi(method, path, body) {
+  if (!ZERNIO_API_KEY) {
+    console.error("! error: zernio API key not set");
+    console.error("  add zernio.apiKey to ~/.grog/config.json (get one at https://zernio.com)");
+    process.exit(1);
+  }
+  const opts = { method, headers: { Authorization: `Bearer ${ZERNIO_API_KEY}` } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${ZERNIO_BASE}${path}`, opts);
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    /* non-JSON body */
+  }
+  if (!res.ok) {
+    const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
+    throw new Error(`Zernio API error: ${msg}`);
+  }
+  return data;
+}
+
+function loadWhatsappState() {
+  try {
+    return JSON.parse(readFileSync(WHATSAPP_STATE_FILE, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveWhatsappState(state) {
+  writeFileSync(WHATSAPP_STATE_FILE, JSON.stringify(state));
+}
+
+/**
+ * Resolve the WhatsApp account ID — config/env, else the first connected
+ * WhatsApp account on the key.
+ */
+async function resolveWhatsappAccountId() {
+  if (ZERNIO_WA_ACCOUNT_ID) return ZERNIO_WA_ACCOUNT_ID;
+  const data = await zernioApi("GET", "/accounts");
+  const wa = (data.accounts || []).find((a) => a.platform === "whatsapp");
+  if (!wa) {
+    console.error("! error: no WhatsApp account connected to this Zernio key");
+    console.error("  connect one at https://zernio.com, or set zernio.whatsappAccountId");
+    process.exit(1);
+  }
+  return wa._id;
+}
+
+/**
+ * Find a conversation for this account, optionally matching a recipient phone.
+ * Conversations are returned most-recently-updated first.
+ */
+async function findWhatsappConversation(accountId, participantId) {
+  const data = await zernioApi(
+    "GET",
+    `/inbox/conversations?accountId=${encodeURIComponent(accountId)}&limit=50`,
+  );
+  const convs = data.data || [];
+  if (participantId) {
+    const digits = String(participantId).replace(/\D/g, "");
+    return (
+      convs.find((c) => String(c.participantId || "").replace(/\D/g, "") === digits) ||
+      null
+    );
+  }
+  return convs[0] || null;
+}
+
+/**
+ * Send freeform text into a conversation (works inside the 24h window).
+ * Splits on the WhatsApp ~4096-char body limit.
+ */
+async function sendWhatsappText(accountId, conversationId, message) {
+  const chunks = [];
+  for (let i = 0; i < message.length; i += 4000) {
+    chunks.push(message.substring(i, i + 4000));
+  }
+  for (const chunk of chunks) {
+    await zernioApi(
+      "POST",
+      `/inbox/conversations/${encodeURIComponent(conversationId)}/messages`,
+      { accountId, message: chunk },
+    );
+  }
+}
+
+/**
+ * Send a freeform image into a WhatsApp conversation (works inside the 24h window).
+ * Zernio accepts message attachments as base64 payloads on the conversation message endpoint.
+ */
+async function sendWhatsappImage(accountId, conversationId, imagePath, caption = "") {
+  const contentType = contentTypeForFile(imagePath);
+  if (!contentType.startsWith("image/")) {
+    throw new Error(`Unsupported WhatsApp image type: ${contentType}`);
+  }
+
+  const file = readFileSync(imagePath);
+  const size = statSync(imagePath).size;
+  const data = await zernioApi(
+    "POST",
+    `/inbox/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      accountId,
+      message: caption,
+      attachments: [
+        {
+          type: "image",
+          filename: basename(imagePath),
+          mimeType: contentType,
+          size,
+          data: file.toString("base64"),
+        },
+      ],
+    },
+  );
+  return data;
+}
+
+async function getWhatsappMessages(accountId, conversationId, limit = 20) {
+  const data = await zernioApi(
+    "GET",
+    `/inbox/conversations/${encodeURIComponent(conversationId)}/messages?accountId=${encodeURIComponent(accountId)}&sortOrder=desc&limit=${limit}`,
+  );
+  return data.messages || data.data || [];
+}
+
+async function isWhatsappFreeformWindowOpen(accountId, conversationId) {
+  const msgs = await getWhatsappMessages(accountId, conversationId, 50);
+  const latestIncoming = msgs
+    .filter((m) => m.direction === "incoming" && m.createdAt)
+    .map((m) => Date.parse(m.createdAt))
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0];
+
+  return latestIncoming
+    ? Date.now() - latestIncoming < 24 * 60 * 60 * 1000
+    : false;
+}
+
+async function waitForWhatsappMessage(accountId, participantId, messageId) {
+  let lastMatch = null;
+  for (let i = 0; i < 20; i++) {
+    const conv = await findWhatsappConversation(accountId, participantId);
+    const conversationId = conv?.id || conv?._id;
+    if (conversationId) {
+      const msgs = await getWhatsappMessages(accountId, conversationId, 20);
+      const msg = msgs.find((m) => (m.id || m._id) === messageId);
+      if (msg) {
+        lastMatch = msg;
+        if (msg.deliveryStatus && msg.deliveryStatus !== "sent") return msg;
+      }
+    }
+    await sleep(1000);
+  }
+  return lastMatch;
+}
+
+function assertWhatsappDelivery(message) {
+  if (!message || message.deliveryStatus !== "failed") return;
+
+  const err = message.deliveryError || {};
+  const code = err.code ? ` ${err.code}` : "";
+  const title = err.title || "delivery failed";
+  const detail = err.message && err.message !== title ? `: ${err.message}` : "";
+  throw new Error(`WhatsApp delivery failed${code}: ${title}${detail}`);
+}
+
+/**
+ * Initialize the WhatsApp bridge — like Telegram, the user messages the
+ * connected number first; we discover the conversation and anchor recv to now.
+ */
+async function handleWhatsappTalk(args = []) {
+  const { to } = parseRecipientArgs(args);
+  const target = to ? resolveAddressBookTarget("whatsapp", to) : null;
+  const participantId = target?.value || ZERNIO_WA_PARTICIPANT;
+  const accountId = await resolveWhatsappAccountId();
+  console.log("> channel: whatsapp (via Zernio)");
+
+  let conv = await findWhatsappConversation(accountId, participantId);
+
+  if (!conv) {
+    const label = participantId
+      ? `from ${participantId}`
+      : "to the connected WhatsApp number";
+    console.log(`> no conversation yet — send a WhatsApp message ${label} to connect.`);
+    console.log("> waiting...");
+    for (let i = 0; i < 12 && !conv; i++) {
+      await sleep(5000);
+      conv = await findWhatsappConversation(accountId, participantId);
+    }
+    if (!conv) {
+      console.error("! timeout — no message received. message the number, then retry.");
+      process.exit(1);
+    }
+  }
+
+  saveWhatsappState({
+    accountId,
+    conversationId: conv.id,
+    participantId: conv.participantId,
+    lastSeenAt: conv.updatedTime || new Date().toISOString(),
+  });
+
+  console.log(`> connected to: ${conv.participantName || conv.participantId}`);
+
+  try {
+    await sendWhatsappText(
+      accountId,
+      conv.id,
+      'Grog is online (WhatsApp).\n\nSend messages here — they will be processed by the active agent session.\n\nSend "bye" to disconnect.',
+    );
+  } catch (err) {
+    console.error(`! welcome not sent: ${err.message}`);
+  }
+
+  console.log("> grog talk is active");
+  console.log(`> account: ${accountId}`);
+  console.log(`> conversation: ${conv.id}`);
+}
+
+/**
+ * Send a message to WhatsApp — accepts a file path or direct text.
+ */
+async function handleWhatsappSend(args) {
+  const { to, rest } = parseRecipientArgs(args);
+
+  if (isSupportedImagePath(rest[0])) {
+    await handleWhatsappSendImage(args);
+    return;
+  }
+
+  let accountId;
+  let conversationId;
+  let target = null;
+
+  if (to) {
+    target = resolveAddressBookTarget("whatsapp", to);
+    accountId = await resolveWhatsappAccountId();
+    const conv = await findWhatsappConversation(accountId, target.value);
+    if (!conv) {
+      console.error(`! error: no active WhatsApp conversation for "${target.label}"`);
+      console.error("  use whatsapp-notify with an approved template to start a cold conversation");
+      process.exit(1);
+    }
+    conversationId = conv.id || conv._id;
+  } else {
+    const state = loadWhatsappState();
+    if (!state.conversationId || !state.accountId) {
+      console.error('! error: no active conversation — run "grog whatsapp-talk" first');
+      process.exit(1);
+    }
+    accountId = state.accountId;
+    conversationId = state.conversationId;
+  }
+
+  const message = readMessageFromArgs(rest);
+
+  if (!message) {
+    console.error("! error: empty message");
+    process.exit(1);
+  }
+
+  await sendWhatsappText(accountId, conversationId, message);
+  console.log(`> sent to WhatsApp${target ? ` (${target.label})` : ""}`);
+}
+
+/**
+ * Send an image to WhatsApp — accepts a contact via --to or an active talk state.
+ */
+async function handleWhatsappSendImage(args) {
+  const { to, rest } = parseRecipientArgs(args);
+  let accountId;
+  let conversationId;
+  let participantId;
+  let target = null;
+
+  if (to) {
+    target = resolveAddressBookTarget("whatsapp", to);
+    accountId = await resolveWhatsappAccountId();
+    const conv = await findWhatsappConversation(accountId, target.value);
+    if (!conv) {
+      console.error(`! error: no active WhatsApp conversation for "${target.label}"`);
+      console.error("  use whatsapp-notify with an approved template to start a cold conversation, then retry inside the 24h window");
+      process.exit(1);
+    }
+    conversationId = conv.id || conv._id;
+    participantId = conv.participantId || target.value;
+  } else {
+    const state = loadWhatsappState();
+    if (!state.conversationId || !state.accountId) {
+      console.error('! error: no active conversation — run "grog whatsapp-talk" first');
+      process.exit(1);
+    }
+    accountId = state.accountId;
+    conversationId = state.conversationId;
+    participantId = state.participantId;
+  }
+
+  const imagePath = rest[0];
+  const caption = rest.slice(1).join(" ");
+
+  if (!imagePath) {
+    console.error("! error: missing image path");
+    console.error("  usage: grog whatsapp-send-image [--to contact] <image-path> [caption]");
+    process.exit(1);
+  }
+
+  if (!existsSync(imagePath)) {
+    console.error(`! error: file not found: ${imagePath}`);
+    process.exit(1);
+  }
+
+  try {
+    const data = await sendWhatsappImage(accountId, conversationId, imagePath, caption);
+    const messageId = data?.data?.messageId || data?.messageId;
+    if (messageId && participantId) {
+      const delivered = await waitForWhatsappMessage(accountId, participantId, messageId);
+      assertWhatsappDelivery(delivered);
+    }
+    console.log(`> image sent to WhatsApp${target ? ` (${target.label})` : ""}${messageId ? ` (${messageId})` : ""}`);
+  } catch (err) {
+    console.error(`! error: failed to send WhatsApp image: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Wait for a WhatsApp message — Zernio's inbox has no long-poll, so we poll
+ * the conversation every ~5s for ~90s and return new incoming messages.
+ */
+async function handleWhatsappRecv() {
+  const state = loadWhatsappState();
+  if (!state.conversationId || !state.accountId) {
+    console.error('! error: no active conversation — run "grog whatsapp-talk" first');
+    process.exit(1);
+  }
+  const sinceMs = state.lastSeenAt ? Date.parse(state.lastSeenAt) : 0;
+
+  for (let attempt = 0; attempt < 18; attempt++) {
+    const msgs = await getWhatsappMessages(state.accountId, state.conversationId, 20);
+
+    const fresh = msgs
+      .filter((m) => m.direction === "incoming" && Date.parse(m.createdAt) > sinceMs)
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+
+    if (msgs.length > 0) {
+      const newest = Math.max(...msgs.map((m) => Date.parse(m.createdAt)));
+      if (newest > Date.parse(state.lastSeenAt || 0)) {
+        state.lastSeenAt = new Date(newest).toISOString();
+        saveWhatsappState(state);
+      }
+    }
+
+    if (fresh.length > 0) {
+      console.log(fresh.map((m) => m.message || "[non-text message]").join("\n"));
+      return;
+    }
+    await sleep(5000);
+  }
+
+  console.log("[no message]");
+}
+
+/**
+ * Notify via WhatsApp — freeform if a conversation is open (inside the 24h
+ * window), otherwise re-engage with an approved template.
+ */
+async function handleWhatsappNotify(args) {
+  const { to, rest } = parseRecipientArgs(args);
+  const target = to ? resolveAddressBookTarget("whatsapp", to) : null;
+  const participantId = target?.value || ZERNIO_WA_PARTICIPANT;
+  const message = rest.join(" ");
+  if (!message) {
+    console.error("! error: empty message");
+    process.exit(1);
+  }
+
+  const accountId = await resolveWhatsappAccountId();
+  const conv = await findWhatsappConversation(accountId, participantId);
+
+  if (conv && await isWhatsappFreeformWindowOpen(accountId, conv.id)) {
+    try {
+      await sendWhatsappText(accountId, conv.id, message);
+      const st = loadWhatsappState();
+      if (!st.conversationId) {
+        saveWhatsappState({
+          accountId,
+          conversationId: conv.id,
+          participantId: conv.participantId,
+          lastSeenAt: new Date().toISOString(),
+        });
+      }
+      console.log(`> notified via WhatsApp${target ? ` (${target.label})` : ""}`);
+      return;
+    } catch (err) {
+      console.error(`> freeform failed (${err.message}); trying template...`);
+    }
+  }
+
+  const phone = participantId || conv?.participantId;
+  if (!phone) {
+    console.error("! error: no recipient — set zernio.whatsappParticipantId in config");
+    process.exit(1);
+  }
+  try {
+    const data = await zernioApi("POST", "/inbox/conversations", {
+      accountId,
+      participantId: String(phone).replace(/\D/g, ""),
+      templateName: ZERNIO_WA_TEMPLATE.name,
+      templateLanguage: ZERNIO_WA_TEMPLATE.language,
+      templateParams: [message],
+    });
+    const messageId = data?.data?.messageId || data?.messageId;
+    if (messageId) {
+      const delivered = await waitForWhatsappMessage(accountId, phone, messageId);
+      assertWhatsappDelivery(delivered);
+    }
+    console.log(`> notified via WhatsApp template (${ZERNIO_WA_TEMPLATE.name})${target ? ` (${target.label})` : ""}`);
+  } catch (err) {
+    console.error(`! error: ${err.message}`);
+    console.error(`  check the WhatsApp Business Account billing/payment settings for account ${accountId}.`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Resolve the bridge channel from CLI flags (--whatsapp/--wa, --telegram/--tg)
+ * with GROG_CHANNEL/config.channel as the fallback. Returns the channel plus
+ * the args with channel flags stripped out.
+ */
+function resolveChannelAndArgs(rawArgs) {
+  let channel = GROG_CHANNEL;
+  const rest = [];
+  for (const a of rawArgs) {
+    if (a === "--whatsapp" || a === "--wa") channel = "whatsapp";
+    else if (a === "--telegram" || a === "--tg") channel = "telegram";
+    else rest.push(a);
+  }
+  return { channel, rest };
 }
 
 /**
@@ -3012,6 +3817,8 @@ async function main() {
     console.log("    grog done <issue-url|id>        mark a Linear issue as Done");
     console.log("    grog talk                       connect to Telegram for remote interaction");
     console.log("    grog notify <message>           send a quick Telegram notification");
+    console.log("    grog contacts list              list saved Telegram/WhatsApp contacts");
+    console.log("    grog contacts save me --whatsapp +393341123870 --telegram 123456");
     console.log("");
     console.log("  github examples:");
     console.log("    grog solve https://github.com/owner/repo/issues/123");
@@ -3034,6 +3841,11 @@ async function main() {
     console.log("    grog jam https://jam.dev/c/abcd-1234 --screenshot");
     console.log("    grog jam https://jam.dev/c/abcd-1234 --open");
     console.log("    grog jam https://jam.dev/c/abcd-1234 --telegram");
+    console.log("");
+    console.log("  messaging examples:");
+    console.log("    grog notify --whatsapp --to me \"Message\"");
+    console.log("    grog whatsapp-send-image --to me /tmp/screenshot.png \"Caption\"");
+    console.log("    grog telegram-send --to me \"Message\"");
     console.log("");
     process.exit(1);
   }
@@ -3100,6 +3912,11 @@ async function main() {
       break;
     }
 
+    case "contact":
+    case "contacts":
+      await handleContacts(process.argv.slice(3));
+      break;
+
     case "done":
       if (!url) {
         console.error("! error: missing Linear issue URL or identifier");
@@ -3118,15 +3935,39 @@ async function main() {
       await handleStart(url);
       break;
 
-    case "talk":
-      await handleTalk();
+    case "talk": {
+      const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
+      if (channel === "whatsapp") await handleWhatsappTalk(rest);
+      else await handleTalk();
       break;
+    }
+
+    // Generic channel-agnostic receive (routes by GROG_CHANNEL/config/flag)
+    case "recv": {
+      const { channel } = resolveChannelAndArgs(process.argv.slice(3));
+      if (channel === "whatsapp") await handleWhatsappRecv();
+      else await handleTelegramRecv();
+      break;
+    }
+
+    // Generic channel-agnostic send (routes by GROG_CHANNEL/config/flag)
+    case "send": {
+      const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
+      if (rest.length === 0) {
+        console.error("! error: missing message or file path");
+        console.log("  usage: grog send [--whatsapp|--telegram] [--to contact] <message-or-image-path>");
+        process.exit(1);
+      }
+      if (channel === "whatsapp") await handleWhatsappSend(rest);
+      else await handleTelegramSend(rest);
+      break;
+    }
 
     case "telegram-send": {
       const sendArgs = process.argv.slice(3);
       if (sendArgs.length === 0) {
         console.error("! error: missing message or file path");
-        console.log("  usage: grog telegram-send <message-or-file-path>");
+        console.log("  usage: grog telegram-send [--to contact] <message-or-file-path>");
         process.exit(1);
       }
       await handleTelegramSend(sendArgs);
@@ -3137,14 +3978,56 @@ async function main() {
       await handleTelegramRecv();
       break;
 
-    case "notify": {
-      const notifyArgs = process.argv.slice(3);
-      if (notifyArgs.length === 0) {
-        console.error("! error: missing message");
-        console.log("  usage: grog notify <message>");
+    case "whatsapp-talk":
+      await handleWhatsappTalk(process.argv.slice(3));
+      break;
+
+    case "whatsapp-recv":
+      await handleWhatsappRecv();
+      break;
+
+    case "whatsapp-send": {
+      const waArgs = process.argv.slice(3);
+      if (waArgs.length === 0) {
+        console.error("! error: missing message or file path");
+        console.log("  usage: grog whatsapp-send [--to contact] <message-or-file-path>");
         process.exit(1);
       }
-      await handleNotify(notifyArgs);
+      await handleWhatsappSend(waArgs);
+      break;
+    }
+
+    case "whatsapp-send-image": {
+      const imageArgs = process.argv.slice(3);
+      if (imageArgs.length === 0) {
+        console.error("! error: missing image path");
+        console.log("  usage: grog whatsapp-send-image [--to contact] <image-path> [caption]");
+        process.exit(1);
+      }
+      await handleWhatsappSendImage(imageArgs);
+      break;
+    }
+
+    case "whatsapp-notify": {
+      const waArgs = process.argv.slice(3);
+      if (waArgs.length === 0) {
+        console.error("! error: missing message");
+        console.log("  usage: grog whatsapp-notify [--to contact] <message>");
+        process.exit(1);
+      }
+      await handleWhatsappNotify(waArgs);
+      break;
+    }
+
+    case "notify": {
+      const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
+      if (rest.length === 0) {
+        console.error("! error: missing message");
+        console.log("  usage: grog notify [--whatsapp|--telegram] [--to contact] <message>");
+        process.exit(1);
+      }
+      if (channel === "whatsapp") await handleWhatsappNotify(rest);
+      else await handleNotify(rest);
       break;
     }
 
@@ -3186,7 +4069,7 @@ async function main() {
         await handleJam([command]);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review, answer, create, jam, start, done");
+        console.log("  available: solve, explore, review, answer, create, jam, start, done, contacts");
         process.exit(1);
       }
   }

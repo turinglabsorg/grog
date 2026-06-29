@@ -234,6 +234,18 @@ node ~/.claude/tools/grog/index.js answer https://linear.app/workspace/issue/PRO
 
 `/grog-talk` opens a bidirectional bridge between your Claude Code session and Telegram. You can walk away from the terminal and keep interacting through your phone — every message you send on Telegram is processed as if you typed it in the terminal.
 
+The CLI also supports generic messaging commands:
+
+```bash
+grog talk --telegram
+grog recv --telegram
+grog send --telegram "Message"
+grog notify --telegram --to me "Message"
+grog contacts save me --whatsapp +393341123870 --telegram 123456
+```
+
+Telegram receive saves document and photo attachments to `/tmp/grog-telegram-files`. Markdown and other text documents are printed to stdout with their saved path, which lets an active agent read file attachments instead of receiving only `[non-text message]`.
+
 Setup:
 1. Create a bot at [@BotFather](https://t.me/BotFather)
 2. Run the installer — it asks for the bot token (optional step)

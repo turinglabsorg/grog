@@ -64,11 +64,16 @@ grog solve <issue-url>            Fetch issue details (GitHub or Linear, auto-de
 grog explore <url>                List issues for batch work (GitHub or Linear)
 grog review <pr-url>              Fetch PR for code review (GitHub only)
 grog answer <url> <file>          Post comment to issue/PR (GitHub or Linear)
-grog talk                         Start Telegram bridge session
-grog notify <message>             Send TG notification (no talk session needed)
-grog telegram-send <msg-or-file>  Send message to TG (needs talk or chat ID)
-grog telegram-recv                Long-poll for TG message (~90s)
+grog talk [--telegram|--whatsapp] Connect a messaging bridge session
+grog recv [--telegram|--whatsapp] Long-poll for a message (~90s)
+grog send [--telegram|--whatsapp] Send a message or file
+grog notify [--telegram|--whatsapp] Send a notification
+grog contacts list                List saved Telegram/WhatsApp contacts
+grog contacts save me --whatsapp +393341123870 --telegram 123456
 ```
+
+Telegram receive downloads document and photo attachments to `/tmp/grog-telegram-files`.
+Markdown and other text documents are printed to stdout with their saved path so the active agent can read them immediately.
 
 ## Supported URL Formats
 
