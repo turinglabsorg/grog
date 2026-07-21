@@ -28,6 +28,8 @@ The messaging bridge supports channel-specific and generic commands:
 
 Discord `talk`, `read`, and `recv` accept `--all` to cover every server the bot belongs to and every visible text/announcement channel plus active thread. Receive uses the Discord Gateway with resumable sessions instead of polling every channel; REST handles discovery and history. Newly invited servers do not need local configuration. Multi-channel receive records the source channel for the next reply. `discordChannelId` is an optional default, not an access boundary.
 
+The Gateway client requests only `GUILDS`, `GUILD_MESSAGES`, and `MESSAGE_CONTENT`. It persists the session ID, resume URL, and sequence in `/tmp/grog-discord-state.json` with mode `0600`, terminates the socket after each CLI receive, and resumes on the next call to avoid consuming a new Identify session for every message. Never persist the bot token in the state file.
+
 Channel selection precedence is CLI flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
 
 ## Telegram Attachments
