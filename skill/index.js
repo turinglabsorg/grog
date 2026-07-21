@@ -6,6 +6,7 @@ import { basename, dirname, join } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
 import { execFileSync, execSync } from "child_process";
+import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
 
 // Load config from ~/.grog/config.json (primary) with .env fallback
 const __filename = fileURLToPath(import.meta.url);
@@ -38,6 +39,11 @@ const TELEGRAM_CHAT_ID = grogConfig.telegramChatId || process.env.TELEGRAM_CHAT_
 const TELEGRAM_STATE_FILE = "/tmp/grog-telegram-state.json";
 const TELEGRAM_DOWNLOAD_DIR = "/tmp/grog-telegram-files";
 
+const DISCORD_BOT_TOKEN = grogConfig.discordBotToken || process.env.DISCORD_BOT_TOKEN;
+const DISCORD_CHANNEL_ID = grogConfig.discordChannelId || process.env.DISCORD_CHANNEL_ID;
+const DISCORD_STATE_FILE = "/tmp/grog-discord-state.json";
+const discordClient = new DiscordClient({ token: DISCORD_BOT_TOKEN });
+
 // Zernio (WhatsApp) bridge config — https://zernio.com/api
 const ZERNIO_API_KEY = grogConfig.zernio?.apiKey || process.env.ZERNIO_API_KEY;
 const ZERNIO_WA_ACCOUNT_ID =
@@ -54,7 +60,7 @@ const ZERNIO_BASE = "https://zernio.com/api/v1";
 const WHATSAPP_STATE_FILE = "/tmp/grog-whatsapp-state.json";
 
 // Which channel the generic talk/recv/send/notify commands use.
-// Precedence: --whatsapp/--telegram flag (handled in main) > GROG_CHANNEL env >
+// Precedence: --whatsapp/--telegram/--discord flag (handled in main) > GROG_CHANNEL env >
 // config.channel > "telegram" (backward compatible default).
 const GROG_CHANNEL = (
   process.env.GROG_CHANNEL ||
@@ -88,6 +94,7 @@ function getContactChannel(contact, channel) {
   if (!contact || typeof contact !== "object") return null;
   if (channel === "whatsapp") return contact.whatsapp || contact.whatsappPhone || contact.phone || null;
   if (channel === "telegram") return contact.telegram || contact.telegramChatId || contact.chatId || null;
+  if (channel === "discord") return contact.discord || contact.discordChannelId || null;
   return null;
 }
 
@@ -119,8 +126,12 @@ function resolveAddressBookTarget(channel, recipient) {
     return { label: recipient, value: String(recipient).trim(), fromAddressBook: false };
   }
 
+  if (channel === "discord" && /^\d{15,22}$/.test(String(recipient).trim())) {
+    return { label: recipient, value: String(recipient).trim(), fromAddressBook: false };
+  }
+
   console.error(`! error: unknown contact "${recipient}"`);
-  console.error("  save it with: grog contacts save <alias> --whatsapp <phone> --telegram <chat-id>");
+  console.error("  save it with: grog contacts save <alias> --whatsapp <phone> --telegram <chat-id> --discord <channel-id>");
   process.exit(1);
 }
 
@@ -213,6 +224,14 @@ function parseContactFields(args) {
       fields.telegram = arg.slice("--tg=".length).trim();
     } else if (arg.startsWith("--chat-id=")) {
       fields.telegram = arg.slice("--chat-id=".length).trim();
+    } else if (arg === "--discord" || arg === "--discord-channel" || arg === "--channel-id") {
+      fields.discord = String(readValue(arg)).trim();
+    } else if (arg.startsWith("--discord=")) {
+      fields.discord = arg.slice("--discord=".length).trim();
+    } else if (arg.startsWith("--discord-channel=")) {
+      fields.discord = arg.slice("--discord-channel=".length).trim();
+    } else if (arg.startsWith("--channel-id=")) {
+      fields.discord = arg.slice("--channel-id=".length).trim();
     } else {
       rest.push(arg);
     }
@@ -225,8 +244,10 @@ function printContact(alias, contact) {
   const parts = [];
   const whatsapp = getContactChannel(contact, "whatsapp");
   const telegram = getContactChannel(contact, "telegram");
+  const discord = getContactChannel(contact, "discord");
   if (whatsapp) parts.push(`whatsapp=${normalizePhone(whatsapp)}`);
   if (telegram) parts.push(`telegram=${telegram}`);
+  if (discord) parts.push(`discord=${discord}`);
   const name = contact?.name ? ` (${contact.name})` : "";
   console.log(`- ${alias}${name}: ${parts.join(", ") || "(no channels)"}`);
 }
@@ -265,13 +286,13 @@ async function handleContacts(args) {
     const alias = args[1];
     if (!alias) {
       console.error("! error: missing contact alias");
-      console.log("  usage: grog contacts save <alias> [--name NAME] [--whatsapp PHONE] [--telegram CHAT_ID]");
+      console.log("  usage: grog contacts save <alias> [--name NAME] [--whatsapp PHONE] [--telegram CHAT_ID] [--discord CHANNEL_ID]");
       process.exit(1);
     }
     const { fields } = parseContactFields(args.slice(2));
     if (Object.keys(fields).length === 0) {
       console.error("! error: missing contact fields");
-      console.log("  usage: grog contacts save <alias> [--name NAME] [--whatsapp PHONE] [--telegram CHAT_ID]");
+      console.log("  usage: grog contacts save <alias> [--name NAME] [--whatsapp PHONE] [--telegram CHAT_ID] [--discord CHANNEL_ID]");
       process.exit(1);
     }
 
@@ -3344,6 +3365,216 @@ async function handleTelegramRecv() {
 }
 
 // ─────────────────────────────────────────────────────────
+// Discord Bridge
+// ─────────────────────────────────────────────────────────
+
+function requireDiscordConfig() {
+  if (!DISCORD_BOT_TOKEN) {
+    console.error("! error: Discord bot token is not configured");
+    console.error("  add discordBotToken to ~/.grog/config.json or set DISCORD_BOT_TOKEN");
+    process.exit(1);
+  }
+}
+
+function parseDiscordArgs(args) {
+  const rest = [];
+  const options = { channelId: null, limit: 50, before: null, after: null };
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const readValue = (flag) => {
+      const value = args[++i];
+      if (!value) {
+        console.error(`! error: ${flag} requires a value`);
+        process.exit(1);
+      }
+      return value;
+    };
+
+    if (arg === "--channel" || arg === "--channel-id") options.channelId = readValue(arg);
+    else if (arg.startsWith("--channel=")) options.channelId = arg.slice("--channel=".length);
+    else if (arg.startsWith("--channel-id=")) options.channelId = arg.slice("--channel-id=".length);
+    else if (arg === "--limit") options.limit = Number(readValue(arg));
+    else if (arg.startsWith("--limit=")) options.limit = Number(arg.slice("--limit=".length));
+    else if (arg === "--before") options.before = readValue(arg);
+    else if (arg.startsWith("--before=")) options.before = arg.slice("--before=".length);
+    else if (arg === "--after") options.after = readValue(arg);
+    else if (arg.startsWith("--after=")) options.after = arg.slice("--after=".length);
+    else rest.push(arg);
+  }
+
+  if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100) {
+    console.error("! error: Discord message limit must be between 1 and 100");
+    process.exit(1);
+  }
+
+  return { ...options, rest };
+}
+
+function loadDiscordState() {
+  try {
+    const state = JSON.parse(readFileSync(DISCORD_STATE_FILE, "utf-8"));
+    if (state.channels && typeof state.channels === "object") return state;
+    if (state.channelId && state.lastMessageId) {
+      return { channels: { [state.channelId]: state.lastMessageId } };
+    }
+  } catch {
+    /* no Discord state yet */
+  }
+  return { channels: {} };
+}
+
+function saveDiscordState(state) {
+  writeFileSync(DISCORD_STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+}
+
+function resolveDiscordChannel(channelId, recipient) {
+  const target = recipient ? resolveAddressBookTarget("discord", recipient) : null;
+  const resolved = target?.value || channelId || DISCORD_CHANNEL_ID;
+  if (!resolved) {
+    console.error("! error: no Discord channel ID configured");
+    console.error("  add discordChannelId to ~/.grog/config.json or pass --channel <id>");
+    process.exit(1);
+  }
+  return { channelId: String(resolved), target };
+}
+
+function latestDiscordMessageId(messages) {
+  return messages.reduce((latest, message) => {
+    if (!latest) return message.id;
+    return BigInt(message.id) > BigInt(latest) ? message.id : latest;
+  }, null);
+}
+
+function sortDiscordMessages(messages) {
+  return [...messages].sort((left, right) => {
+    const leftId = BigInt(left.id);
+    const rightId = BigInt(right.id);
+    return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+  });
+}
+
+async function formatDiscordMessage(message) {
+  const author = message.author?.global_name || message.author?.username || message.author?.id || "unknown";
+  const parts = [
+    `[Discord ${message.id}] ${author}${message.timestamp ? ` · ${message.timestamp}` : ""}`,
+  ];
+  if (message.content) parts.push(message.content);
+
+  for (const attachment of message.attachments || []) {
+    try {
+      const localPath = await discordClient.downloadAttachment(attachment, message.id);
+      parts.push(`attachment: ${attachment.filename || basename(localPath)}`);
+      parts.push(`saved: ${localPath}`);
+      if (isDiscordTextAttachment(attachment)) {
+        const content = readFileSync(localPath, "utf-8");
+        const maxChars = 200000;
+        parts.push("--- file content ---");
+        parts.push(content.length > maxChars ? `${content.slice(0, maxChars)}\n[truncated]` : content);
+        parts.push("--- end file content ---");
+      } else {
+        parts.push("[discord attachment saved]");
+      }
+    } catch (error) {
+      parts.push(`attachment download failed: ${error.message}`);
+    }
+  }
+
+  if (!message.content && !(message.attachments || []).length) {
+    parts.push("[non-text message]");
+  }
+  return parts.join("\n");
+}
+
+async function handleDiscordTalk(args) {
+  requireDiscordConfig();
+  const { channelId: requestedChannelId } = parseDiscordArgs(args);
+  const { channelId } = resolveDiscordChannel(requestedChannelId, null);
+  const [me, channel, latest] = await Promise.all([
+    discordClient.getCurrentUser(),
+    discordClient.getChannel(channelId),
+    discordClient.listMessages(channelId, { limit: 1 }),
+  ]);
+  const state = loadDiscordState();
+  const latestId = latestDiscordMessageId(latest);
+  if (latestId) state.channels[channelId] = latestId;
+  saveDiscordState(state);
+
+  await discordClient.sendMessage(
+    channelId,
+    'Grog is online. Send messages here and use "bye" to disconnect the active agent session.',
+  );
+  console.log("> grog talk is active");
+  console.log(`> bot: ${me.username || me.id}`);
+  console.log(`> channel: #${channel.name || channelId} (${channelId})`);
+}
+
+async function handleDiscordRead(args) {
+  requireDiscordConfig();
+  const { to, rest: recipientRest } = parseRecipientArgs(args);
+  const { channelId: requestedChannelId, limit, before, after } = parseDiscordArgs(recipientRest);
+  const { channelId } = resolveDiscordChannel(requestedChannelId, to);
+  const messages = await discordClient.listMessages(channelId, { limit, before, after });
+  if (!messages.length) {
+    console.log("[no message]");
+    return;
+  }
+  const formatted = await Promise.all(sortDiscordMessages(messages).map(formatDiscordMessage));
+  console.log(formatted.join("\n\n"));
+}
+
+async function handleDiscordRecv(args) {
+  requireDiscordConfig();
+  const { to, rest: recipientRest } = parseRecipientArgs(args);
+  const { channelId: requestedChannelId } = parseDiscordArgs(recipientRest);
+  const { channelId } = resolveDiscordChannel(requestedChannelId, to);
+  const me = await discordClient.getCurrentUser();
+  const state = loadDiscordState();
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const after = state.channels[channelId] || null;
+    const messages = await discordClient.listMessages(channelId, { limit: 100, after });
+    const latestId = latestDiscordMessageId(messages);
+    if (latestId) {
+      state.channels[channelId] = latestId;
+      saveDiscordState(state);
+    }
+
+    const incoming = sortDiscordMessages(messages).filter((message) => message.author?.id !== me.id);
+    if (incoming.length) {
+      const formatted = await Promise.all(incoming.map(formatDiscordMessage));
+      console.log(formatted.join("\n\n"));
+      return;
+    }
+
+    if (attempt < 29) await sleep(3000);
+  }
+
+  console.log("[no message]");
+}
+
+async function handleDiscordSend(args) {
+  requireDiscordConfig();
+  const { to, rest: recipientRest } = parseRecipientArgs(args);
+  const { channelId: requestedChannelId, rest } = parseDiscordArgs(recipientRest);
+  const { channelId, target } = resolveDiscordChannel(requestedChannelId, to);
+  const message = readMessageFromArgs(rest);
+  if (!message) {
+    console.error("! error: empty Discord message");
+    process.exit(1);
+  }
+
+  const chunks = [];
+  for (let i = 0; i < message.length; i += 1900) {
+    chunks.push(message.substring(i, i + 1900));
+  }
+  for (const chunk of chunks) {
+    await discordClient.sendMessage(channelId, chunk);
+  }
+  console.log(`> sent to Discord${target ? ` (${target.label})` : ` (${channelId})`}`);
+}
+
+// ─────────────────────────────────────────────────────────
 // WhatsApp Bridge (via Zernio — https://zernio.com/api)
 // ─────────────────────────────────────────────────────────
 
@@ -3780,7 +4011,8 @@ async function handleWhatsappNotify(args) {
 }
 
 /**
- * Resolve the bridge channel from CLI flags (--whatsapp/--wa, --telegram/--tg)
+ * Resolve the bridge channel from CLI flags (--whatsapp/--wa, --telegram/--tg,
+ * --discord/--dc)
  * with GROG_CHANNEL/config.channel as the fallback. Returns the channel plus
  * the args with channel flags stripped out.
  */
@@ -3790,6 +4022,7 @@ function resolveChannelAndArgs(rawArgs) {
   for (const a of rawArgs) {
     if (a === "--whatsapp" || a === "--wa") channel = "whatsapp";
     else if (a === "--telegram" || a === "--tg") channel = "telegram";
+    else if (a === "--discord" || a === "--dc") channel = "discord";
     else rest.push(a);
   }
   return { channel, rest };
@@ -3815,10 +4048,11 @@ async function main() {
     console.log("    grog jam <jam-url>              inspect/open a Jam.dev report");
     console.log("    grog start <issue-url|id>       mark a Linear issue as In Progress");
     console.log("    grog done <issue-url|id>        mark a Linear issue as Done");
-    console.log("    grog talk                       connect to Telegram for remote interaction");
-    console.log("    grog notify <message>           send a quick Telegram notification");
-    console.log("    grog contacts list              list saved Telegram/WhatsApp contacts");
-    console.log("    grog contacts save me --whatsapp +393341123870 --telegram 123456");
+    console.log("    grog talk                       connect a messaging bridge for remote interaction");
+    console.log("    grog notify <message>           send a quick messaging notification");
+    console.log("    grog discord-read               read recent Discord messages and attachments");
+    console.log("    grog contacts list              list saved messaging contacts");
+    console.log("    grog contacts save team --discord 123456789012345678");
     console.log("");
     console.log("  github examples:");
     console.log("    grog solve https://github.com/owner/repo/issues/123");
@@ -3846,6 +4080,8 @@ async function main() {
     console.log("    grog notify --whatsapp --to me \"Message\"");
     console.log("    grog whatsapp-send-image --to me /tmp/screenshot.png \"Caption\"");
     console.log("    grog telegram-send --to me \"Message\"");
+    console.log("    grog discord-read --channel 123456789012345678 --limit 20");
+    console.log("    grog discord-send --channel 123456789012345678 \"Message\"");
     console.log("");
     process.exit(1);
   }
@@ -3938,14 +4174,16 @@ async function main() {
     case "talk": {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
       if (channel === "whatsapp") await handleWhatsappTalk(rest);
+      else if (channel === "discord") await handleDiscordTalk(rest);
       else await handleTalk();
       break;
     }
 
     // Generic channel-agnostic receive (routes by GROG_CHANNEL/config/flag)
     case "recv": {
-      const { channel } = resolveChannelAndArgs(process.argv.slice(3));
+      const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
       if (channel === "whatsapp") await handleWhatsappRecv();
+      else if (channel === "discord") await handleDiscordRecv(rest);
       else await handleTelegramRecv();
       break;
     }
@@ -3955,11 +4193,35 @@ async function main() {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
       if (rest.length === 0) {
         console.error("! error: missing message or file path");
-        console.log("  usage: grog send [--whatsapp|--telegram] [--to contact] <message-or-image-path>");
+        console.log("  usage: grog send [--whatsapp|--telegram|--discord] [--to contact] <message-or-file-path>");
         process.exit(1);
       }
       if (channel === "whatsapp") await handleWhatsappSend(rest);
+      else if (channel === "discord") await handleDiscordSend(rest);
       else await handleTelegramSend(rest);
+      break;
+    }
+
+    case "discord-talk":
+      await handleDiscordTalk(process.argv.slice(3));
+      break;
+
+    case "discord-read":
+      await handleDiscordRead(process.argv.slice(3));
+      break;
+
+    case "discord-recv":
+      await handleDiscordRecv(process.argv.slice(3));
+      break;
+
+    case "discord-send": {
+      const discordArgs = process.argv.slice(3);
+      if (discordArgs.length === 0) {
+        console.error("! error: missing Discord message");
+        console.log("  usage: grog discord-send [--channel ID|--to contact] <message-or-file-path>");
+        process.exit(1);
+      }
+      await handleDiscordSend(discordArgs);
       break;
     }
 
@@ -4023,10 +4285,11 @@ async function main() {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
       if (rest.length === 0) {
         console.error("! error: missing message");
-        console.log("  usage: grog notify [--whatsapp|--telegram] [--to contact] <message>");
+        console.log("  usage: grog notify [--whatsapp|--telegram|--discord] [--to contact] <message>");
         process.exit(1);
       }
       if (channel === "whatsapp") await handleWhatsappNotify(rest);
+      else if (channel === "discord") await handleDiscordSend(rest);
       else await handleNotify(rest);
       break;
     }
@@ -4069,7 +4332,7 @@ async function main() {
         await handleJam([command]);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review, answer, create, jam, start, done, contacts");
+        console.log("  available: solve, explore, review, answer, create, jam, start, done, contacts, talk, recv, send, discord-read");
         process.exit(1);
       }
   }

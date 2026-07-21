@@ -26,7 +26,7 @@ Creates a Linear issue in the configured workspace. The project must declare the
 
 ### `/grog-talk`
 
-Opens a bidirectional Telegram bridge. Connect a Telegram bot to your Claude Code session, then walk away from the terminal and keep interacting from your phone. Messages you send on Telegram are processed as if you typed them in the terminal. Responses are sent back to Telegram as concise summaries.
+Opens a bidirectional Telegram, WhatsApp, or Discord bridge. Messages received from the selected channel are processed as if they were typed in the terminal, and responses are sent back through the same channel.
 
 ## Installation
 
@@ -48,7 +48,8 @@ The installer will:
 - Install npm dependencies
 - Ask for your GitHub Personal Access Token
 - Optionally configure a Telegram bot for remote interaction
-- Create the five skill files in `~/.claude/skills/`
+- Optionally configure a Discord bot and default channel
+- Create the Grog skill files in `~/.claude/skills/`
 
 ### 3. Create a GitHub token
 
@@ -75,6 +76,14 @@ Open any Claude Code session and type:
 /grog-answer https://linear.app/workspace/issue/PROJ-123 --image /tmp/screenshot.png
 /grog-create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
 /grog-talk
+```
+
+Discord can also be used directly from the CLI:
+
+```bash
+grog discord-read --channel 123456789012345678 --limit 20
+grog discord-recv --channel 123456789012345678
+grog discord-send --channel 123456789012345678 "Message"
 ```
 
 ## Personality & Voice
@@ -159,6 +168,19 @@ node ~/.claude/tools/grog/index.js telegram-send-image /path/to/image.png "Optio
 ```
 
 This command sends images using the Telegram Bot API `sendPhoto` method, supporting any image format.
+
+## Discord Setup (optional)
+
+Create a bot in the Discord Developer Portal, enable `Message Content Intent`, and grant it `View Channels`, `Read Message History`, and `Send Messages` only in the channels Grog should access. Store the bot token and default channel ID in `~/.grog/config.json`:
+
+```json
+{
+  "discordBotToken": "discord-bot-token",
+  "discordChannelId": "123456789012345678"
+}
+```
+
+Discord reads save attachments to `/tmp/grog-discord-files`. Text-like attachments are printed inline; binary attachments expose their local path.
 
 ## Jam.dev Reports
 

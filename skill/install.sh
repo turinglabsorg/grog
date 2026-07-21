@@ -66,7 +66,7 @@ set_env_var() {
   chmod 600 "$file"
 }
 
-echo -e "${BOLD}[1/7]${NC} creating directories..."
+echo -e "${BOLD}[1/8]${NC} creating directories..."
 mkdir -p "$TOOLS_DIR"
 mkdir -p "$GROG_CONFIG_DIR"
 mkdir -p "$SKILLS_DIR/grog-solve"
@@ -82,13 +82,14 @@ echo "  > $GROG_CONFIG_DIR"
 echo "  > skill directories"
 
 echo ""
-echo -e "${BOLD}[2/7]${NC} copying files..."
+echo -e "${BOLD}[2/8]${NC} copying files..."
 cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
+cp "$SCRIPT_DIR/discord-client.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
-echo "  > index.js and package.json"
+echo "  > index.js, discord-client.js and package.json"
 
 echo ""
-echo -e "${BOLD}[3/7]${NC} installing dependencies..."
+echo -e "${BOLD}[3/8]${NC} installing dependencies..."
 cd "$TOOLS_DIR"
 npm install --silent
 echo "  > dependencies installed"
@@ -98,6 +99,8 @@ if [ -f "$TOOLS_DIR/.env" ]; then
   EXISTING_GH=$(grep "^GH_TOKEN=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
   EXISTING_TG_TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
   EXISTING_TG_CHAT=$(grep "^TELEGRAM_CHAT_ID=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  EXISTING_DISCORD_TOKEN=$(grep "^DISCORD_BOT_TOKEN=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  EXISTING_DISCORD_CHANNEL=$(grep "^DISCORD_CHANNEL_ID=" "$TOOLS_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
 
   if [ -n "$EXISTING_GH" ] && [ -z "$(get_config_val ghToken)" ]; then
     set_config_val "ghToken" "$EXISTING_GH"
@@ -108,10 +111,16 @@ if [ -f "$TOOLS_DIR/.env" ]; then
   if [ -n "$EXISTING_TG_CHAT" ] && [ -z "$(get_config_val telegramChatId)" ]; then
     set_config_val "telegramChatId" "$EXISTING_TG_CHAT"
   fi
+  if [ -n "$EXISTING_DISCORD_TOKEN" ] && [ -z "$(get_config_val discordBotToken)" ]; then
+    set_config_val "discordBotToken" "$EXISTING_DISCORD_TOKEN"
+  fi
+  if [ -n "$EXISTING_DISCORD_CHANNEL" ] && [ -z "$(get_config_val discordChannelId)" ]; then
+    set_config_val "discordChannelId" "$EXISTING_DISCORD_CHANNEL"
+  fi
 fi
 
 echo ""
-echo -e "${BOLD}[4/7]${NC} configuring GitHub token..."
+echo -e "${BOLD}[4/8]${NC} configuring GitHub token..."
 echo ""
 echo "To fetch GitHub issues, grog needs a Personal Access Token."
 echo "You can create one at: https://github.com/settings/tokens"
@@ -143,7 +152,7 @@ if [ "$SKIP_TOKEN" != "true" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[5/7]${NC} configuring Linear workspaces (optional, multi-workspace)..."
+echo -e "${BOLD}[5/8]${NC} configuring Linear workspaces (optional, multi-workspace)..."
 echo ""
 echo "  grog supports multiple Linear workspaces. Each project declares which one"
 echo "  to use via a '.grog' file in its root (workspace=NAME)."
@@ -181,7 +190,7 @@ if [ -n "$LEGACY_KEY" ] && [ -z "$(jq -r '.linear // empty | keys[]?' "$GROG_CON
 fi
 
 echo ""
-echo -e "${BOLD}[6/7]${NC} configuring Telegram (optional)..."
+echo -e "${BOLD}[6/8]${NC} configuring Telegram (optional)..."
 echo ""
 echo "  grog talk lets you interact with Claude Code remotely via Telegram."
 echo "  /grog-talk lets you interact with Claude Code remotely via Telegram."
@@ -220,7 +229,42 @@ if [ "$SKIP_TG" != "true" ]; then
 fi
 
 echo ""
-echo -e "${BOLD}[7/7]${NC} creating Claude Code skills..."
+echo -e "${BOLD}[7/8]${NC} configuring Discord (optional)..."
+echo ""
+echo "  Create a Discord application and bot at https://discord.com/developers/applications"
+echo "  Enable Message Content Intent in Bot settings, then grant View Channels,"
+echo "  Read Message History, and Send Messages only in channels Grog should access."
+echo ""
+
+SKIP_DISCORD=false
+CURRENT_DISCORD_TOKEN=$(get_config_val "discordBotToken")
+if [ -n "$CURRENT_DISCORD_TOKEN" ]; then
+    echo "  a Discord bot token already exists"
+    read -p "  replace it? (y/N): " REPLACE_DISCORD
+    if [[ ! "$REPLACE_DISCORD" =~ ^[Yy]$ ]]; then
+        echo "  > keeping existing Discord config"
+        SKIP_DISCORD=true
+    fi
+fi
+
+if [ "$SKIP_DISCORD" != "true" ]; then
+    read -p "  enter your Discord bot token (or press Enter to skip): " DISCORD_TOKEN
+    if [ -n "$DISCORD_TOKEN" ]; then
+        set_config_val "discordBotToken" "$DISCORD_TOKEN"
+        set_env_var "DISCORD_BOT_TOKEN" "$DISCORD_TOKEN"
+        read -p "  enter the default Discord channel ID: " DISCORD_CHANNEL
+        if [ -n "$DISCORD_CHANNEL" ]; then
+            set_config_val "discordChannelId" "$DISCORD_CHANNEL"
+            set_env_var "DISCORD_CHANNEL_ID" "$DISCORD_CHANNEL"
+        fi
+        echo "  > Discord config saved to $GROG_CONFIG"
+    else
+        echo "  > skipped. add discordBotToken and discordChannelId to $GROG_CONFIG later."
+    fi
+fi
+
+echo ""
+echo -e "${BOLD}[8/8]${NC} creating Claude Code skills..."
 
 # Skill 1: /grog-solve - Fetch and solve a single issue
 cat > "$SKILLS_DIR/grog-solve/SKILL.md" << 'EOF'
@@ -633,17 +677,18 @@ EOF
 
 echo "  > /grog-create skill"
 
-# Skill 6: /grog-talk - Telegram bridge for remote interaction
+# Skill 6: /grog-talk - messaging bridge for remote interaction
 cat > "$SKILLS_DIR/grog-talk/SKILL.md" << 'EOF'
 ---
 name: grog-talk
-description: Open a Telegram bridge to interact with Claude Code remotely. Use when the user wants to connect Telegram for remote interaction.
+description: Open a Telegram, WhatsApp, or Discord bridge to interact with Claude Code remotely. Use when the user wants a remote messaging bridge.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
+argument-hint: [--telegram|--whatsapp|--discord]
 ---
 
-# GROG Talk — Telegram Bridge
+# GROG Talk — Messaging Bridge
 
-Connect this Claude Code session to Telegram. The user can walk away from the terminal and keep working through their phone.
+Connect this Claude Code session to Telegram, WhatsApp, or Discord. The user can walk away from the terminal and keep working through the selected channel.
 
 ## Personality & Voice
 
@@ -672,15 +717,15 @@ You are **Grog** — a developer tool with soul. Sarcastic, opinionated, and all
 }
 ```
 
-Personality shapes your commentary and Telegram messages. It never compromises code quality or analysis depth — those are always top-tier. On Telegram, keep the Grog voice but stay extra concise since it's mobile.
+Personality shapes your commentary and bridge messages. It never compromises code quality or analysis depth — those are always top-tier. Keep remote responses concise.
 
 ## Initialize
 
 ```bash
-node ~/.claude/tools/grog/index.js talk
+node ~/.claude/tools/grog/index.js talk $ARGUMENTS
 ```
 
-If no chat ID is configured, the tool will ask the user to message the bot on Telegram. Once connected, it sends a welcome message.
+The command uses the selected channel flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`. Once connected, it sends a welcome message.
 
 ## Message Loop
 
@@ -689,40 +734,41 @@ After initialization, enter a continuous receive-process-respond loop:
 ### 1. Receive
 
 ```bash
-node ~/.claude/tools/grog/index.js telegram-recv
+node ~/.claude/tools/grog/index.js recv $ARGUMENTS
 ```
 
-This blocks for up to ~90 seconds waiting for a Telegram message.
+This blocks for up to ~90 seconds waiting for a message. Discord attachments are downloaded automatically to `/tmp/grog-discord-files`.
 
 ### 2. Handle the result
 
 - **`[no message]`** — No message arrived. Call `telegram-recv` again immediately. Do not print anything to the terminal.
 - **`bye` / `exit` / `quit`** — The user wants to disconnect. Send a farewell message:
   ```bash
-  node ~/.claude/tools/grog/index.js telegram-send "Grog disconnected. See you!"
+  node ~/.claude/tools/grog/index.js send $ARGUMENTS "Grog disconnected. See you!"
   ```
   Then stop the loop and tell the user in the terminal that talk mode has ended.
 - **Anything else** — This is a user request. Process it exactly as if it was typed in the terminal:
   1. Use all available tools (Read, Edit, Bash, Grep, Glob, Write, etc.) to fulfill the request
-  2. Write a concise response to `/tmp/grog-telegram-response.md` (keep under 4000 characters)
+  2. Write a concise response to `/tmp/grog-bridge-response.md`
   3. Send it:
      ```bash
-     node ~/.claude/tools/grog/index.js telegram-send /tmp/grog-telegram-response.md
+     node ~/.claude/tools/grog/index.js send $ARGUMENTS /tmp/grog-bridge-response.md
      ```
   4. Go back to step 1 (Receive)
 
 ## Rules
 
-- Treat every Telegram message as a direct instruction from the user
-- Full terminal output is still visible — Telegram responses should be concise summaries
+- Treat every bridge message as a direct instruction from the user
+- Full terminal output is still visible — remote responses should be concise summaries
+- Inspect every downloaded attachment path before acting on the message
 - For long code output, summarize the result rather than dumping raw content
-- If a request fails, send the error message to Telegram so the user knows what happened
+- If a request fails, send the error message through the selected channel so the user knows what happened
 - When idle (receiving `[no message]`), loop silently — do not add any commentary or output
 - You can use ALL your tools during the loop — the user might ask you to read files, edit code, run tests, search, anything
 
 ## Error Handling
 
-- If the Telegram bot token is missing, tell the user to run the installer or add telegramBotToken to `~/.grog/config.json`
+- If the selected channel credentials are missing, tell the user which config keys are required in `~/.grog/config.json`
 - If connection fails, report the error and stop the loop
 EOF
 
@@ -740,7 +786,7 @@ echo "    /grog-explore <url>         list all issues for batch processing"
 echo "    /grog-review <pr-url>       review a pull request (GitHub only)"
 echo "    /grog-answer <url>          post a summary comment to an issue or PR"
 echo "    /grog-create linear ...     create a Linear issue"
-echo "    /grog-talk                  connect to Telegram for remote interaction"
+echo "    /grog-talk                  connect Telegram, WhatsApp, or Discord"
 echo ""
 echo "  github examples:"
 echo "    /grog-solve https://github.com/owner/repo/issues/123"
@@ -757,6 +803,7 @@ echo "    /grog-create linear --team PROJ --title \"Bug title\" --description-fi
 echo "    /grog-answer https://linear.app/workspace/issue/PROJ-123"
 echo ""
 echo "    /grog-talk"
+echo "    /grog-talk --discord"
 echo ""
 echo "  files:"
 echo "    config: $GROG_CONFIG"

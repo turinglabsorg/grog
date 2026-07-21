@@ -1,11 +1,11 @@
 # Grog — Claude Code Skill System
 
-Autonomous GitHub + Linear workflow tool and Telegram bridge for Claude Code.
+Autonomous GitHub + Linear workflow tool and multi-channel messaging bridge for Claude Code.
 
 ## Architecture
 
 ```
-~/.grog/config.json          Central config (ghToken, linear.<workspace>, telegramBotToken, telegramChatId)
+~/.grog/config.json          Central config (GitHub, Linear, Telegram, WhatsApp, Discord)
 ~/.claude/tools/grog/        Runtime (index.js, node_modules)
 ~/.claude/skills/grog-*/     Skill definitions (SKILL.md files)
 <project>/.grog              Per-project file: workspace=<NAME> (REQUIRED for Linear)
@@ -23,7 +23,9 @@ All credentials live in `~/.grog/config.json`:
     "KAIROS":  "lin_api_..."
   },
   "telegramBotToken": "123456:ABC...",
-  "telegramChatId": "12345678"
+  "telegramChatId": "12345678",
+  "discordBotToken": "discord-bot-token",
+  "discordChannelId": "123456789012345678"
 }
 ```
 
@@ -55,7 +57,7 @@ Fallback: `~/.claude/tools/grog/.env` (legacy, kept for backward compat).
 | `/grog-explore <url>` | List issues for batch processing (GitHub repo/project or Linear team/workspace) |
 | `/grog-review <pr-url>` | Review a pull request (GitHub only) |
 | `/grog-answer <url>` | Post a summary comment to GitHub issue/PR or Linear issue |
-| `/grog-talk` | Bidirectional Telegram bridge |
+| `/grog-talk` | Bidirectional Telegram, WhatsApp, or Discord bridge |
 
 ## CLI Commands (index.js)
 
@@ -64,16 +66,19 @@ grog solve <issue-url>            Fetch issue details (GitHub or Linear, auto-de
 grog explore <url>                List issues for batch work (GitHub or Linear)
 grog review <pr-url>              Fetch PR for code review (GitHub only)
 grog answer <url> <file>          Post comment to issue/PR (GitHub or Linear)
-grog talk [--telegram|--whatsapp] Connect a messaging bridge session
-grog recv [--telegram|--whatsapp] Long-poll for a message (~90s)
-grog send [--telegram|--whatsapp] Send a message or file
-grog notify [--telegram|--whatsapp] Send a notification
-grog contacts list                List saved Telegram/WhatsApp contacts
-grog contacts save me --whatsapp +393341123870 --telegram 123456
+grog talk [--telegram|--whatsapp|--discord] Connect a messaging bridge session
+grog recv [--telegram|--whatsapp|--discord] Long-poll for a message (~90s)
+grog send [--telegram|--whatsapp|--discord] Send a message or file
+grog notify [--telegram|--whatsapp|--discord] Send a notification
+grog discord-read [--channel ID] Read recent messages and download attachments
+grog contacts list                List saved messaging contacts
+grog contacts save team --discord 123456789012345678
 ```
 
 Telegram receive downloads document and photo attachments to `/tmp/grog-telegram-files`.
 Markdown and other text documents are printed to stdout with their saved path so the active agent can read them immediately.
+
+Discord receive/read downloads attachments to `/tmp/grog-discord-files`. Text-like files are printed inline; binary files expose their local path. Discord uses REST API v10 with no additional npm dependency.
 
 ## Supported URL Formats
 
@@ -102,7 +107,8 @@ bash skill/install.sh
 
 # Project structure
 skill/
-  index.js          All CLI commands (solve, explore, review, answer, talk, notify, telegram-*)
+  index.js          All CLI commands and messaging orchestration
+  discord-client.js Discord REST client and attachment downloader
   install.sh        Installer (copies files, sets up config)
   package.json      Dependencies (dotenv)
 

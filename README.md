@@ -230,9 +230,9 @@ node ~/.claude/tools/grog/index.js create linear --team PROJ --title "Bug title"
 node ~/.claude/tools/grog/index.js answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md --image /tmp/screenshot.png
 ```
 
-### Telegram Bridge
+### Messaging Bridge
 
-`/grog-talk` opens a bidirectional bridge between your Claude Code session and Telegram. You can walk away from the terminal and keep interacting through your phone — every message you send on Telegram is processed as if you typed it in the terminal.
+`/grog-talk` opens a bidirectional bridge between your Claude Code session and Telegram, WhatsApp, or Discord. Messages received from the selected channel are processed as if they were typed in the terminal.
 
 The CLI also supports generic messaging commands:
 
@@ -242,6 +242,8 @@ grog recv --telegram
 grog send --telegram "Message"
 grog notify --telegram --to me "Message"
 grog contacts save me --whatsapp +393341123870 --telegram 123456
+grog discord-read --channel 123456789012345678 --limit 20
+grog send --discord --channel 123456789012345678 "Message"
 ```
 
 Telegram receive saves document and photo attachments to `/tmp/grog-telegram-files`. Markdown and other text documents are printed to stdout with their saved path, which lets an active agent read file attachments instead of receiving only `[non-text message]`.
@@ -250,6 +252,16 @@ Setup:
 1. Create a bot at [@BotFather](https://t.me/BotFather)
 2. Run the installer — it asks for the bot token (optional step)
 3. Type `/grog-talk` in Claude Code and message your bot to connect
+
+Discord setup:
+
+1. Create an application and bot in the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Enable `Message Content Intent` under the bot settings so Discord returns message text and attachments.
+3. Invite the bot to the server with `View Channels`, `Read Message History`, and `Send Messages` permissions for only the channels Grog should access.
+4. Enable Discord Developer Mode, copy the target channel ID, and save `discordBotToken` and `discordChannelId` in `~/.grog/config.json`.
+5. Run `grog discord-read` to inspect recent messages, `grog discord-recv` to wait for new messages, or `grog discord-send "Message"` to write to the configured channel.
+
+Discord message reads automatically download attachments to `/tmp/grog-discord-files`. Text-like files are printed inline with their saved path; binary files expose the saved path for local inspection. Automatic mentions are disabled when Grog sends a message.
 
 ### Configuration
 
@@ -263,13 +275,16 @@ All credentials are stored in `~/.grog/config.json`:
     "KAIROS":  "lin_api_..."
   },
   "telegramBotToken": "123456:ABC...",
-  "telegramChatId": "12345678"
+  "telegramChatId": "12345678",
+  "discordBotToken": "discord-bot-token",
+  "discordChannelId": "123456789012345678"
 }
 ```
 
 - **ghToken** — GitHub Personal Access Token ([create one](https://github.com/settings/tokens))
 - **linear** — one entry per Linear workspace. The key is a logical name you pick (e.g. `MTROPRO`, `KAIROS`); the value is the API key for that workspace ([create keys](https://linear.app/settings/api))
 - **telegramBotToken** / **telegramChatId** — for `/grog-talk` bridge
+- **discordBotToken** / **discordChannelId** — Discord bot credentials and default channel for read/write/attachment access
 
 ### Per-project workspace hint (`.grog`)
 

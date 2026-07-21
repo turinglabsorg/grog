@@ -18,12 +18,13 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 
 The messaging bridge supports channel-specific and generic commands:
 
-- `grog talk [--telegram|--whatsapp]`
-- `grog recv [--telegram|--whatsapp]`
-- `grog send [--telegram|--whatsapp] [--to contact] <message-or-file>`
-- `grog notify [--telegram|--whatsapp] [--to contact] <message>`
+- `grog talk [--telegram|--whatsapp|--discord]`
+- `grog recv [--telegram|--whatsapp|--discord]`
+- `grog send [--telegram|--whatsapp|--discord] [--to contact] <message-or-file>`
+- `grog notify [--telegram|--whatsapp|--discord] [--to contact] <message>`
 - `grog telegram-send`, `grog telegram-recv`, `grog telegram-send-image`
 - `grog whatsapp-talk`, `grog whatsapp-recv`, `grog whatsapp-send`, `grog whatsapp-send-image`, `grog whatsapp-notify`
+- `grog discord-talk`, `grog discord-read`, `grog discord-recv`, `grog discord-send`
 
 Channel selection precedence is CLI flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
 
@@ -43,6 +44,18 @@ For Markdown and other text-like documents, the CLI prints:
 
 For non-text documents and photos, the CLI prints the saved local path so the active agent can inspect the artifact with local tools.
 
+## Discord Attachments
+
+`grog discord-read`, `grog discord-recv`, and the generic Discord receive command download attachments to:
+
+```text
+/tmp/grog-discord-files
+```
+
+Downloads are restricted to Discord CDN hosts and 100 MB per file. Text-like attachments are printed with their saved path and content; binary attachments print the saved local path. Discord sends disable automatic mentions by default.
+
+Discord bots must have `Message Content Intent` enabled or Discord returns empty message content and attachment fields. Limit the bot role to `View Channels`, `Read Message History`, and `Send Messages` in only the intended channels.
+
 ## Configuration
 
 Primary config lives in:
@@ -57,6 +70,8 @@ Important keys:
 - `linear`
 - `telegramBotToken`
 - `telegramChatId`
+- `discordBotToken`
+- `discordChannelId`
 - `zernio.apiKey`
 - `zernio.whatsappAccountId`
 - `zernio.whatsappParticipantId`
@@ -68,5 +83,6 @@ Important keys:
 
 - Keep `skill/index.js` aligned with the installed runtime when local fixes have been made in `~/.codex/tools/grog/index.js`.
 - After CLI changes, run `node --check skill/index.js`.
+- Run `npm test --prefix skill` after Discord client changes.
 - Runtime-test messaging changes against the real bridge when credentials are available.
 - Do not print or commit tokens, chat IDs, or contact phone numbers except placeholder examples.
