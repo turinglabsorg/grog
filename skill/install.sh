@@ -741,7 +741,7 @@ This blocks for up to ~90 seconds waiting for a message. Discord attachments are
 
 ### 2. Handle the result
 
-- **`[no message]`** — No message arrived. Call `telegram-recv` again immediately. Do not print anything to the terminal.
+- **`[no message]`** — No message arrived. Call `recv` again immediately. Do not print anything to the terminal.
 - **`bye` / `exit` / `quit`** — The user wants to disconnect. Send a farewell message:
   ```bash
   node ~/.claude/tools/grog/index.js send $ARGUMENTS "Grog disconnected. See you!"
