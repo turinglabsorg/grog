@@ -3378,7 +3378,7 @@ function requireDiscordConfig() {
 
 function parseDiscordArgs(args) {
   const rest = [];
-  const options = { channelId: null, limit: 50, before: null, after: null };
+  const options = { channelId: null, all: false, limit: 50, before: null, after: null };
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -3394,6 +3394,7 @@ function parseDiscordArgs(args) {
     if (arg === "--channel" || arg === "--channel-id") options.channelId = readValue(arg);
     else if (arg.startsWith("--channel=")) options.channelId = arg.slice("--channel=".length);
     else if (arg.startsWith("--channel-id=")) options.channelId = arg.slice("--channel-id=".length);
+    else if (arg === "--all") options.all = true;
     else if (arg === "--limit") options.limit = Number(readValue(arg));
     else if (arg.startsWith("--limit=")) options.limit = Number(arg.slice("--limit=".length));
     else if (arg === "--before") options.before = readValue(arg);
@@ -3414,14 +3415,24 @@ function parseDiscordArgs(args) {
 function loadDiscordState() {
   try {
     const state = JSON.parse(readFileSync(DISCORD_STATE_FILE, "utf-8"));
-    if (state.channels && typeof state.channels === "object") return state;
+    if (state.channels && typeof state.channels === "object") {
+      return {
+        channels: state.channels,
+        lastActiveChannelId: state.lastActiveChannelId || null,
+        gateway: state.gateway || null,
+      };
+    }
     if (state.channelId && state.lastMessageId) {
-      return { channels: { [state.channelId]: state.lastMessageId } };
+      return {
+        channels: { [state.channelId]: state.lastMessageId },
+        lastActiveChannelId: state.channelId,
+        gateway: null,
+      };
     }
   } catch {
     /* no Discord state yet */
   }
-  return { channels: {} };
+  return { channels: {}, lastActiveChannelId: null, gateway: null };
 }
 
 function saveDiscordState(state) {
@@ -3430,13 +3441,32 @@ function saveDiscordState(state) {
 
 function resolveDiscordChannel(channelId, recipient) {
   const target = recipient ? resolveAddressBookTarget("discord", recipient) : null;
-  const resolved = target?.value || channelId || DISCORD_CHANNEL_ID;
+  const state = loadDiscordState();
+  const resolved = target?.value || channelId || state.lastActiveChannelId || DISCORD_CHANNEL_ID;
   if (!resolved) {
     console.error("! error: no Discord channel ID configured");
-    console.error("  add discordChannelId to ~/.grog/config.json or pass --channel <id>");
+    console.error("  pass --channel <id>, configure discordChannelId, or receive a message with --all first");
     process.exit(1);
   }
   return { channelId: String(resolved), target };
+}
+
+function useAllDiscordChannels(options, recipient) {
+  if (options.all && (options.channelId || recipient)) {
+    console.error("! error: --all cannot be combined with --channel or --to");
+    process.exit(1);
+  }
+  return options.all || (!options.channelId && !recipient && !DISCORD_CHANNEL_ID);
+}
+
+function isSkippableDiscordChannelError(error) {
+  return error?.status === 403 || error?.status === 404;
+}
+
+function discordChannelLabel(channel) {
+  const guild = channel?.guildName ? `${channel.guildName}/` : "";
+  const name = channel?.name || channel?.id || "unknown";
+  return `${guild}#${name}`;
 }
 
 function latestDiscordMessageId(messages) {
@@ -3454,10 +3484,18 @@ function sortDiscordMessages(messages) {
   });
 }
 
-async function formatDiscordMessage(message) {
+function sortDiscordMessageEntries(entries) {
+  return [...entries].sort((left, right) => {
+    const leftId = BigInt(left.message.id);
+    const rightId = BigInt(right.message.id);
+    return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+  });
+}
+
+async function formatDiscordMessage(message, channel = null) {
   const author = message.author?.global_name || message.author?.username || message.author?.id || "unknown";
   const parts = [
-    `[Discord ${message.id}] ${author}${message.timestamp ? ` · ${message.timestamp}` : ""}`,
+    `[Discord ${channel ? `${discordChannelLabel(channel)} · ` : ""}${message.id}] ${author}${message.timestamp ? ` · ${message.timestamp}` : ""}`,
   ];
   if (message.content) parts.push(message.content);
 
@@ -3488,7 +3526,23 @@ async function formatDiscordMessage(message) {
 
 async function handleDiscordTalk(args) {
   requireDiscordConfig();
-  const { channelId: requestedChannelId } = parseDiscordArgs(args);
+  const options = parseDiscordArgs(args);
+  const all = useAllDiscordChannels(options, null);
+
+  if (all) {
+    const [me, discovery] = await Promise.all([
+      discordClient.getCurrentUser(),
+      discordClient.discoverMessageChannels(),
+    ]);
+
+    console.log("> grog talk is active across Discord");
+    console.log(`> bot: ${me.username || me.id}`);
+    console.log(`> servers: ${discovery.guilds.length}`);
+    console.log(`> discovered message channels: ${discovery.channels.length}`);
+    return;
+  }
+
+  const { channelId: requestedChannelId } = options;
   const { channelId } = resolveDiscordChannel(requestedChannelId, null);
   const [me, channel, latest] = await Promise.all([
     discordClient.getCurrentUser(),
@@ -3509,54 +3563,120 @@ async function handleDiscordTalk(args) {
   console.log(`> channel: #${channel.name || channelId} (${channelId})`);
 }
 
+async function handleDiscordChannels() {
+  requireDiscordConfig();
+  const [me, discovery] = await Promise.all([
+    discordClient.getCurrentUser(),
+    discordClient.discoverMessageChannels(),
+  ]);
+  console.log(`> Discord bot: ${me.username || me.id}`);
+  console.log(`> servers: ${discovery.guilds.length}`);
+
+  for (const guild of discovery.guilds) {
+    console.log(`\n${guild.name || guild.id} (${guild.id})`);
+    const channels = discovery.channels.filter((channel) => channel.guildId === guild.id);
+    if (!channels.length) {
+      console.log("  [no message channels]");
+      continue;
+    }
+    for (const channel of channels) {
+      console.log(`  #${channel.name || channel.id} (${channel.id})${channel.isThread ? " [active thread]" : ""}`);
+    }
+  }
+}
+
 async function handleDiscordRead(args) {
   requireDiscordConfig();
   const { to, rest: recipientRest } = parseRecipientArgs(args);
-  const { channelId: requestedChannelId, limit, before, after } = parseDiscordArgs(recipientRest);
+  const options = parseDiscordArgs(recipientRest);
+  const { channelId: requestedChannelId, limit, before, after } = options;
+  const all = useAllDiscordChannels(options, to);
+
+  if (all) {
+    const { channels } = await discordClient.discoverMessageChannels();
+    const entries = [];
+    let skippedChannels = 0;
+    for (const channel of channels) {
+      try {
+        const messages = await discordClient.listMessages(channel.id, { limit, before, after });
+        entries.push(...messages.map((message) => ({ message, channel })));
+      } catch (error) {
+        if (!isSkippableDiscordChannelError(error)) throw error;
+        skippedChannels += 1;
+      }
+    }
+    if (!entries.length) {
+      console.log("[no message]");
+    } else {
+      const formatted = await Promise.all(
+        sortDiscordMessageEntries(entries).map(({ message, channel }) => formatDiscordMessage(message, channel)),
+      );
+      console.log(formatted.join("\n\n"));
+    }
+    if (skippedChannels) console.error(`> skipped ${skippedChannels} Discord channels without read access`);
+    return;
+  }
+
   const { channelId } = resolveDiscordChannel(requestedChannelId, to);
+  const channel = await discordClient.getChannel(channelId);
   const messages = await discordClient.listMessages(channelId, { limit, before, after });
   if (!messages.length) {
     console.log("[no message]");
     return;
   }
-  const formatted = await Promise.all(sortDiscordMessages(messages).map(formatDiscordMessage));
+  const formatted = await Promise.all(sortDiscordMessages(messages).map((message) => formatDiscordMessage(message, channel)));
   console.log(formatted.join("\n\n"));
 }
 
 async function handleDiscordRecv(args) {
   requireDiscordConfig();
   const { to, rest: recipientRest } = parseRecipientArgs(args);
-  const { channelId: requestedChannelId } = parseDiscordArgs(recipientRest);
-  const { channelId } = resolveDiscordChannel(requestedChannelId, to);
+  const options = parseDiscordArgs(recipientRest);
+  const all = useAllDiscordChannels(options, to);
+  const { channelId: requestedChannelId } = options;
+  const resolved = all ? null : resolveDiscordChannel(requestedChannelId, to);
   const me = await discordClient.getCurrentUser();
   const state = loadDiscordState();
+  const { message, session } = await discordClient.waitForMessage({
+    timeoutMs: 90000,
+    session: state.gateway,
+    channelIds: resolved ? [resolved.channelId] : null,
+    ignoreUserId: me.id,
+  });
+  state.gateway = session;
 
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const after = state.channels[channelId] || null;
-    const messages = await discordClient.listMessages(channelId, { limit: 100, after });
-    const latestId = latestDiscordMessageId(messages);
-    if (latestId) {
-      state.channels[channelId] = latestId;
-      saveDiscordState(state);
-    }
-
-    const incoming = sortDiscordMessages(messages).filter((message) => message.author?.id !== me.id);
-    if (incoming.length) {
-      const formatted = await Promise.all(incoming.map(formatDiscordMessage));
-      console.log(formatted.join("\n\n"));
-      return;
-    }
-
-    if (attempt < 29) await sleep(3000);
+  if (!message) {
+    saveDiscordState(state);
+    console.log("[no message]");
+    return;
   }
 
-  console.log("[no message]");
+  state.channels[message.channel_id] = message.id;
+  state.lastActiveChannelId = message.channel_id;
+  saveDiscordState(state);
+
+  const [channel, guild] = await Promise.all([
+    discordClient.getChannel(message.channel_id).catch(() => ({ id: message.channel_id })),
+    message.guild_id
+      ? discordClient.getGuild(message.guild_id).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const context = {
+    ...channel,
+    id: message.channel_id,
+    guildName: guild?.name || message.guild_id || null,
+  };
+  console.log(await formatDiscordMessage(message, context));
 }
 
 async function handleDiscordSend(args) {
   requireDiscordConfig();
   const { to, rest: recipientRest } = parseRecipientArgs(args);
-  const { channelId: requestedChannelId, rest } = parseDiscordArgs(recipientRest);
+  const { channelId: requestedChannelId, all, rest } = parseDiscordArgs(recipientRest);
+  if (all) {
+    console.error("! error: --all is only valid for Discord talk, read, and receive commands");
+    process.exit(1);
+  }
   const { channelId, target } = resolveDiscordChannel(requestedChannelId, to);
   const message = readMessageFromArgs(rest);
   if (!message) {
@@ -4051,6 +4171,7 @@ async function main() {
     console.log("    grog talk                       connect a messaging bridge for remote interaction");
     console.log("    grog notify <message>           send a quick messaging notification");
     console.log("    grog discord-read               read recent Discord messages and attachments");
+    console.log("    grog discord-channels           list every discovered Discord server and channel");
     console.log("    grog contacts list              list saved messaging contacts");
     console.log("    grog contacts save team --discord 123456789012345678");
     console.log("");
@@ -4080,6 +4201,9 @@ async function main() {
     console.log("    grog notify --whatsapp --to me \"Message\"");
     console.log("    grog whatsapp-send-image --to me /tmp/screenshot.png \"Caption\"");
     console.log("    grog telegram-send --to me \"Message\"");
+    console.log("    grog discord-channels");
+    console.log("    grog discord-read --all --limit 20");
+    console.log("    grog discord-recv --all");
     console.log("    grog discord-read --channel 123456789012345678 --limit 20");
     console.log("    grog discord-send --channel 123456789012345678 \"Message\"");
     console.log("");
@@ -4210,6 +4334,11 @@ async function main() {
       await handleDiscordRead(process.argv.slice(3));
       break;
 
+    case "discord-channels":
+    case "discord-servers":
+      await handleDiscordChannels();
+      break;
+
     case "discord-recv":
       await handleDiscordRecv(process.argv.slice(3));
       break;
@@ -4332,7 +4461,7 @@ async function main() {
         await handleJam([command]);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review, answer, create, jam, start, done, contacts, talk, recv, send, discord-read");
+        console.log("  available: solve, explore, review, answer, create, jam, start, done, contacts, talk, recv, send, discord-read, discord-channels");
         process.exit(1);
       }
   }

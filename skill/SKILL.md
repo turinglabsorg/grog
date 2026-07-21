@@ -48,7 +48,7 @@ The installer will:
 - Install npm dependencies
 - Ask for your GitHub Personal Access Token
 - Optionally configure a Telegram bot for remote interaction
-- Optionally configure a Discord bot and default channel
+- Optionally configure a Discord bot; a default channel is not required for all-server mode
 - Create the Grog skill files in `~/.claude/skills/`
 
 ### 3. Create a GitHub token
@@ -81,8 +81,10 @@ Open any Claude Code session and type:
 Discord can also be used directly from the CLI:
 
 ```bash
+grog discord-channels
+grog discord-read --all --limit 20
+grog discord-recv --all
 grog discord-read --channel 123456789012345678 --limit 20
-grog discord-recv --channel 123456789012345678
 grog discord-send --channel 123456789012345678 "Message"
 ```
 
@@ -171,7 +173,7 @@ This command sends images using the Telegram Bot API `sendPhoto` method, support
 
 ## Discord Setup (optional)
 
-Create a bot in the Discord Developer Portal, enable `Message Content Intent`, and grant it `View Channels`, `Read Message History`, and `Send Messages` only in the channels Grog should access. Store the bot token and default channel ID in `~/.grog/config.json`:
+Create a bot in the Discord Developer Portal, enable `Message Content Intent`, and grant it `View Channels`, `Read Message History`, and `Send Messages` wherever Grog should operate. Store the bot token in `~/.grog/config.json`; the default channel is optional:
 
 ```json
 {
@@ -181,6 +183,8 @@ Create a bot in the Discord Developer Portal, enable `Message Content Intent`, a
 ```
 
 Discord reads save attachments to `/tmp/grog-discord-files`. Text-like attachments are printed inline; binary attachments expose their local path.
+
+Use `--all` with `talk`, `recv`, or `discord-read` to cover every server, visible text/announcement channel, and active thread. Receive uses resumable Discord Gateway sessions instead of polling every channel and routes the next response to the source channel. Archived threads are picked up again when Discord reactivates them.
 
 ## Jam.dev Reports
 

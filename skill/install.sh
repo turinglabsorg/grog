@@ -86,12 +86,13 @@ echo -e "${BOLD}[2/8]${NC} copying files..."
 cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/discord-client.js" "$TOOLS_DIR/"
 cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
-echo "  > index.js, discord-client.js and package.json"
+cp "$SCRIPT_DIR/package-lock.json" "$TOOLS_DIR/"
+echo "  > index.js, discord-client.js, package.json and package-lock.json"
 
 echo ""
 echo -e "${BOLD}[3/8]${NC} installing dependencies..."
 cd "$TOOLS_DIR"
-npm install --silent
+npm ci --silent
 echo "  > dependencies installed"
 
 # Migrate existing .env values to config.json if they exist
@@ -233,7 +234,7 @@ echo -e "${BOLD}[7/8]${NC} configuring Discord (optional)..."
 echo ""
 echo "  Create a Discord application and bot at https://discord.com/developers/applications"
 echo "  Enable Message Content Intent in Bot settings, then grant View Channels,"
-echo "  Read Message History, and Send Messages only in channels Grog should access."
+echo "  Read Message History, and Send Messages in every channel Grog should access."
 echo ""
 
 SKIP_DISCORD=false
@@ -252,14 +253,14 @@ if [ "$SKIP_DISCORD" != "true" ]; then
     if [ -n "$DISCORD_TOKEN" ]; then
         set_config_val "discordBotToken" "$DISCORD_TOKEN"
         set_env_var "DISCORD_BOT_TOKEN" "$DISCORD_TOKEN"
-        read -p "  enter the default Discord channel ID: " DISCORD_CHANNEL
+        read -p "  enter an optional default Discord channel ID (Enter = all-server mode): " DISCORD_CHANNEL
         if [ -n "$DISCORD_CHANNEL" ]; then
             set_config_val "discordChannelId" "$DISCORD_CHANNEL"
             set_env_var "DISCORD_CHANNEL_ID" "$DISCORD_CHANNEL"
         fi
         echo "  > Discord config saved to $GROG_CONFIG"
     else
-        echo "  > skipped. add discordBotToken and discordChannelId to $GROG_CONFIG later."
+        echo "  > skipped. add discordBotToken to $GROG_CONFIG later."
     fi
 fi
 
@@ -683,7 +684,7 @@ cat > "$SKILLS_DIR/grog-talk/SKILL.md" << 'EOF'
 name: grog-talk
 description: Open a Telegram, WhatsApp, or Discord bridge to interact with Claude Code remotely. Use when the user wants a remote messaging bridge.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
-argument-hint: [--telegram|--whatsapp|--discord]
+argument-hint: [--telegram|--whatsapp|--discord] [--all]
 ---
 
 # GROG Talk — Messaging Bridge
@@ -725,7 +726,7 @@ Personality shapes your commentary and bridge messages. It never compromises cod
 node ~/.claude/tools/grog/index.js talk $ARGUMENTS
 ```
 
-The command uses the selected channel flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`. Once connected, it sends a welcome message.
+The command uses the selected channel flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`. Once connected, it sends a welcome message. For Discord, use `--discord --all` unless the user explicitly asks to limit the bridge to one channel. This covers all servers, visible text/announcement channels, and active threads.
 
 ## Message Loop
 
@@ -737,7 +738,7 @@ After initialization, enter a continuous receive-process-respond loop:
 node ~/.claude/tools/grog/index.js recv $ARGUMENTS
 ```
 
-This blocks for up to ~90 seconds waiting for a message. Discord attachments are downloaded automatically to `/tmp/grog-discord-files`.
+This blocks for up to ~90 seconds waiting for a message. Discord attachments are downloaded automatically to `/tmp/grog-discord-files`. Discord receive uses a resumable Gateway session instead of polling every channel, and the following `send` goes back to the channel that produced the latest message.
 
 ### 2. Handle the result
 
@@ -768,7 +769,7 @@ This blocks for up to ~90 seconds waiting for a message. Discord attachments are
 
 ## Error Handling
 
-- If the selected channel credentials are missing, tell the user which config keys are required in `~/.grog/config.json`
+- If the selected channel credentials are missing, tell the user which config keys are required in `~/.grog/config.json`. Discord all-server mode requires only `discordBotToken`; `discordChannelId` is optional.
 - If connection fails, report the error and stop the loop
 EOF
 

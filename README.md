@@ -242,6 +242,9 @@ grog recv --telegram
 grog send --telegram "Message"
 grog notify --telegram --to me "Message"
 grog contacts save me --whatsapp +393341123870 --telegram 123456
+grog discord-channels
+grog discord-read --all --limit 20
+grog discord-recv --all
 grog discord-read --channel 123456789012345678 --limit 20
 grog send --discord --channel 123456789012345678 "Message"
 ```
@@ -257,11 +260,13 @@ Discord setup:
 
 1. Create an application and bot in the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Enable `Message Content Intent` under the bot settings so Discord returns message text and attachments.
-3. Invite the bot to the server with `View Channels`, `Read Message History`, and `Send Messages` permissions for only the channels Grog should access.
-4. Enable Discord Developer Mode, copy the target channel ID, and save `discordBotToken` and `discordChannelId` in `~/.grog/config.json`.
-5. Run `grog discord-read` to inspect recent messages, `grog discord-recv` to wait for new messages, or `grog discord-send "Message"` to write to the configured channel.
+3. Invite the bot to each server with `View Channels`, `Read Message History`, and `Send Messages` permissions wherever Grog should operate.
+4. Save `discordBotToken` in `~/.grog/config.json`. `discordChannelId` is optional and only provides a default destination.
+5. Run `grog discord-channels` to inspect discovery, `grog discord-read --all` to read across servers, or `grog discord-recv --all` to wait for new messages.
 
 Discord message reads automatically download attachments to `/tmp/grog-discord-files`. Text-like files are printed inline with their saved path; binary files expose the saved path for local inspection. Automatic mentions are disabled when Grog sends a message.
+
+All-server mode covers every server the bot belongs to, visible text/announcement channels, and active threads. Receive uses the Discord Gateway for real-time events and resumes the prior session between CLI calls instead of polling every channel. The next response is routed to the source channel. Archived threads are picked up again when Discord reactivates them.
 
 ### Configuration
 
@@ -284,7 +289,7 @@ All credentials are stored in `~/.grog/config.json`:
 - **ghToken** — GitHub Personal Access Token ([create one](https://github.com/settings/tokens))
 - **linear** — one entry per Linear workspace. The key is a logical name you pick (e.g. `MTROPRO`, `KAIROS`); the value is the API key for that workspace ([create keys](https://linear.app/settings/api))
 - **telegramBotToken** / **telegramChatId** — for `/grog-talk` bridge
-- **discordBotToken** / **discordChannelId** — Discord bot credentials and default channel for read/write/attachment access
+- **discordBotToken** / **discordChannelId** — Discord bot credential and optional default destination; omit the channel ID for automatic all-server mode
 
 ### Per-project workspace hint (`.grog`)
 

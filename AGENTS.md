@@ -12,7 +12,7 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 - `grog jam <jam-url>` inspects Jam.dev reports.
 - `grog start <issue-url|id>` marks Linear issues In Progress.
 - `grog done <issue-url|id>` marks Linear issues Done.
-- `grog contacts ...` manages Telegram and WhatsApp address book entries.
+- `grog contacts ...` manages Telegram, WhatsApp, and Discord address book entries.
 
 ## Messaging Bridge
 
@@ -24,7 +24,9 @@ The messaging bridge supports channel-specific and generic commands:
 - `grog notify [--telegram|--whatsapp|--discord] [--to contact] <message>`
 - `grog telegram-send`, `grog telegram-recv`, `grog telegram-send-image`
 - `grog whatsapp-talk`, `grog whatsapp-recv`, `grog whatsapp-send`, `grog whatsapp-send-image`, `grog whatsapp-notify`
-- `grog discord-talk`, `grog discord-read`, `grog discord-recv`, `grog discord-send`
+- `grog discord-talk`, `grog discord-channels`, `grog discord-read`, `grog discord-recv`, `grog discord-send`
+
+Discord `talk`, `read`, and `recv` accept `--all` to cover every server the bot belongs to and every visible text/announcement channel plus active thread. Receive uses the Discord Gateway with resumable sessions instead of polling every channel; REST handles discovery and history. Newly invited servers do not need local configuration. Multi-channel receive records the source channel for the next reply. `discordChannelId` is an optional default, not an access boundary.
 
 Channel selection precedence is CLI flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
 
@@ -54,7 +56,7 @@ For non-text documents and photos, the CLI prints the saved local path so the ac
 
 Downloads are restricted to Discord CDN hosts and 100 MB per file. Text-like attachments are printed with their saved path and content; binary attachments print the saved local path. Discord sends disable automatic mentions by default.
 
-Discord bots must have `Message Content Intent` enabled or Discord returns empty message content and attachment fields. Limit the bot role to `View Channels`, `Read Message History`, and `Send Messages` in only the intended channels.
+Discord bots must have `Message Content Intent` enabled or Discord returns empty message content and attachment fields. Discord permissions remain the access boundary: grant `View Channels`, `Read Message History`, and `Send Messages` wherever Grog should operate.
 
 ## Configuration
 
@@ -71,7 +73,7 @@ Important keys:
 - `telegramBotToken`
 - `telegramChatId`
 - `discordBotToken`
-- `discordChannelId`
+- `discordChannelId` (optional default; omit it for automatic all-server mode)
 - `zernio.apiKey`
 - `zernio.whatsappAccountId`
 - `zernio.whatsappParticipantId`

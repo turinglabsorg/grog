@@ -67,10 +67,12 @@ grog explore <url>                List issues for batch work (GitHub or Linear)
 grog review <pr-url>              Fetch PR for code review (GitHub only)
 grog answer <url> <file>          Post comment to issue/PR (GitHub or Linear)
 grog talk [--telegram|--whatsapp|--discord] Connect a messaging bridge session
-grog recv [--telegram|--whatsapp|--discord] Long-poll for a message (~90s)
+grog recv [--telegram|--whatsapp|--discord] Wait for a message (~90s)
 grog send [--telegram|--whatsapp|--discord] Send a message or file
 grog notify [--telegram|--whatsapp|--discord] Send a notification
-grog discord-read [--channel ID] Read recent messages and download attachments
+grog discord-channels             List discovered Discord servers, channels, and active threads
+grog discord-read [--all|--channel ID] Read recent messages and download attachments
+grog discord-recv [--all|--channel ID] Wait for messages in one or every visible channel
 grog contacts list                List saved messaging contacts
 grog contacts save team --discord 123456789012345678
 ```
@@ -78,7 +80,7 @@ grog contacts save team --discord 123456789012345678
 Telegram receive downloads document and photo attachments to `/tmp/grog-telegram-files`.
 Markdown and other text documents are printed to stdout with their saved path so the active agent can read them immediately.
 
-Discord receive/read downloads attachments to `/tmp/grog-discord-files`. Text-like files are printed inline; binary files expose their local path. Discord uses REST API v10 with no additional npm dependency.
+Discord receive/read downloads attachments to `/tmp/grog-discord-files`. Text-like files are printed inline; binary files expose their local path. `--all` covers every server, visible text/announcement channel, and active thread. Receive uses the Discord Gateway for real-time events and resumable sessions; REST API v10 handles discovery, history, send, and downloads. The source channel is remembered so the next send replies there. `discordChannelId` is only an optional default.
 
 ## Supported URL Formats
 
