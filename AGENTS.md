@@ -32,6 +32,14 @@ The Gateway client requests only `GUILDS`, `GUILD_MESSAGES`, and `MESSAGE_CONTEN
 
 Channel selection precedence is CLI flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
 
+## Outgoing Payload Safety
+
+Inline text is reserved for single-line messages. Multiline messages must be written as UTF-8 text files and sent by passing the file path to `grog send`, `grog telegram-send`, `grog whatsapp-send`, or `grog discord-send`.
+
+The shared message reader rejects inline payloads containing literal `\n` or `\r\n` escapes before any network request. Do not use `JSON.stringify` or shell interpolation to transport multiline messages. Send images through the channel-specific image command rather than as text or a generic file path.
+
+`skill/message-input.test.js` verifies that malformed inline Telegram payloads are rejected before the bridge attempts a request.
+
 ## Telegram Attachments
 
 `grog recv --telegram` and `grog telegram-recv` download Telegram document and photo attachments to:
