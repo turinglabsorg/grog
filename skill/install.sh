@@ -683,8 +683,6 @@ cat > "$SKILLS_DIR/grog-talk/SKILL.md" << 'EOF'
 ---
 name: grog-talk
 description: Open a Telegram, WhatsApp, or Discord bridge to interact with Claude Code remotely. Use when the user wants a remote messaging bridge.
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob
-argument-hint: [--telegram|--whatsapp|--discord] [--all]
 ---
 
 # GROG Talk — Messaging Bridge
@@ -727,6 +725,19 @@ node ~/.claude/tools/grog/index.js talk $ARGUMENTS
 ```
 
 The command uses the selected channel flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`. Once connected, it sends a welcome message. For Discord, use `--discord --all` unless the user explicitly asks to limit the bridge to one channel. This covers all servers, visible text/announcement channels, and active threads.
+
+## Outgoing Message Safety
+
+- Send a one-line message inline only when it contains no escaped line breaks.
+- For every multiline message, write the exact UTF-8 content to `/tmp/grog-bridge-response.md`, inspect it, and pass only the file path to `grog send` or `grog telegram-send`.
+- Never use `JSON.stringify`, shell interpolation, or literal `\n`/`\r\n` sequences to transport multiline text. The CLI rejects escaped line breaks in inline messages.
+- Before sending a text file, run `rg -n -F '\n' /tmp/grog-bridge-response.md`; if it matches formatting escapes that should be real line breaks, fix the file first.
+- Send images with the channel image command, never as text or as a generic message path.
+
+```bash
+grog telegram-send --to RECIPIENT /tmp/grog-bridge-response.md
+grog telegram-send-image --to RECIPIENT /path/to/image.png "Optional caption"
+```
 
 ## Message Loop
 

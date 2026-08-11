@@ -165,7 +165,15 @@ function readMessageFromArgs(args) {
   if (args.length === 1 && existsSync(args[0])) {
     return readFileSync(args[0], "utf-8").trim();
   }
-  return args.join(" ");
+
+  const message = args.join(" ");
+  if (message.includes("\\n")) {
+    console.error("! error: inline message contains literal \\n/\\r\\n escapes");
+    console.error("  write multiline content to a UTF-8 text file and pass its path instead");
+    process.exit(1);
+  }
+
+  return message;
 }
 
 function sanitizeTelegramFileName(value) {
