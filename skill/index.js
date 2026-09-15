@@ -7,6 +7,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSyn
 import { homedir } from "os";
 import { execFileSync, execSync } from "child_process";
 import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
+import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
 
 // Load config from ~/.grog/config.json (primary) with .env fallback
 const __filename = fileURLToPath(import.meta.url);
@@ -363,7 +364,7 @@ function findGrogFile(startDir) {
 /**
  * Resolve which Linear workspace to use. Requires a `.grog` file in the
  * current project (searched upward from cwd) with a `workspace=NAME` line.
- * The name must match a key in config.linear. No fallback — if anything is
+ * The name must match an entry in config.linear (a key string or { env: "VARIABLE_NAME" }). No fallback — if anything is
  * missing, exits with an actionable error.
  */
 function resolveLinearApiKey() {
@@ -392,7 +393,18 @@ function resolveLinearApiKey() {
   }
 
   const keys = grogConfig.linear || {};
-  const key = keys[workspace];
+  const entry = keys[workspace];
+  let key;
+  if (typeof entry === "string") {
+    key = entry;
+  } else if (entry && typeof entry.env === "string" && /^[A-Z_][A-Z0-9_]*$/.test(entry.env)) {
+    key = process.env[entry.env];
+    if (!key) {
+      console.error(`! error: workspace "${workspace}" requires environment variable ${entry.env}`);
+      console.error("  inject the workspace credential through hush run --redact before invoking grog");
+      process.exit(1);
+    }
+  }
   if (!key) {
     console.error(`! error: workspace "${workspace}" (from ${source}) not configured in ~/.grog/config.json`);
     console.error("  expected shape: { \"linear\": { \"" + workspace + "\": \"lin_api_...\" } }");
@@ -817,6 +829,64 @@ async function markLinearIssueStarted(identifier) {
     changed: true,
     previousState: issue.state,
     targetState: startedState,
+  };
+}
+
+async function markLinearIssueCanceled(identifier) {
+  const issue = await fetchLinearIssueWithWorkflowStates(identifier);
+  const states = issue.team?.states?.nodes || [];
+  const canceledState =
+    states.find(
+      (state) =>
+        state.type === "canceled" &&
+        state.name?.toLowerCase() === "canceled",
+    ) ||
+    states.find((state) => state.type === "canceled");
+
+  if (!canceledState) {
+    throw new Error(
+      `No canceled workflow state found for team ${issue.team?.key || "unknown"}`,
+    );
+  }
+
+  if (issue.state?.id === canceledState.id) {
+    return {
+      issue,
+      changed: false,
+      previousState: issue.state,
+      targetState: canceledState,
+    };
+  }
+
+  const mutation = `
+    mutation($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) {
+        success
+        issue {
+          id
+          identifier
+          title
+          url
+          state { id name type }
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(mutation, {
+    id: issue.id,
+    input: { stateId: canceledState.id },
+  });
+
+  if (!data.issueUpdate?.success) {
+    throw new Error("Failed to update Linear issue");
+  }
+
+  return {
+    issue: data.issueUpdate.issue,
+    changed: true,
+    previousState: issue.state,
+    targetState: canceledState,
   };
 }
 
@@ -1908,6 +1978,42 @@ async function handleStart(issueRef) {
   }
 }
 
+async function handleCancel(issueRef) {
+  if (detectPlatform(issueRef) && detectPlatform(issueRef) !== "linear") {
+    console.error("! error: cancel only supports Linear issues");
+    console.error("  usage: grog cancel <linear-issue-url-or-identifier>");
+    process.exit(1);
+  }
+
+  requireLinearToken();
+  const identifier = parseLinearIssueIdentifier(issueRef);
+  if (!identifier) {
+    console.error("! error: invalid Linear issue reference");
+    console.error("  usage: grog cancel <linear-issue-url-or-identifier>");
+    console.error("  examples:");
+    console.error("    grog cancel https://linear.app/workspace/issue/PROJ-123");
+    console.error("    grog cancel PROJ-123");
+    process.exit(1);
+  }
+
+  try {
+    console.log(`> marking Linear issue ${identifier} as Canceled...`);
+    const result = await markLinearIssueCanceled(identifier);
+    console.log("");
+    boxHeader(`${result.issue.identifier}: ${result.issue.title || "Canceled"}`);
+    console.log("");
+    field(
+      "state",
+      `${result.issue.state?.name || result.targetState.name} (${result.issue.state?.type || result.targetState.type})`,
+    );
+    field("changed", result.changed ? "yes" : "no");
+    field("url", result.issue.url || "");
+  } catch (error) {
+    console.error("! error:", error.message);
+    process.exit(1);
+  }
+}
+
 /**
  * Handle 'explore' command for a repository
  */
@@ -2502,6 +2608,24 @@ function readCliFlag(args, names) {
   return undefined;
 }
 
+function readCliListFlags(args, names) {
+  const aliases = Array.isArray(names) ? names : [names];
+  const values = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    for (const name of aliases) {
+      if (arg === name && args[i + 1]) values.push(args[i + 1]);
+      if (arg.startsWith(`${name}=`)) values.push(arg.slice(name.length + 1));
+    }
+  }
+
+  return values
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function parseLinearPriority(value) {
   if (!value) return undefined;
   const normalized = String(value).trim().toLowerCase();
@@ -2527,13 +2651,69 @@ function parseLinearPriority(value) {
 }
 
 async function handleCreate(args) {
-  const target = args[0] === "linear" ? "linear" : null;
+  const target = ["linear", "github"].includes(args[0]) ? args[0] : null;
   const createArgs = target ? args.slice(1) : args;
 
-  if (target !== "linear") {
+  if (!target) {
     console.error("! error: missing create target");
-    console.error("  usage: grog create linear --team TEAM --title \"Title\" [--description-file /tmp/body.md]");
+    console.error("  usage: grog create github --repo OWNER/REPO --title \"Title\" [--body \"text\" | --body-file file]");
+    console.error("         grog create linear --team TEAM --title \"Title\" [--description \"text\" | --description-file file]");
     process.exit(1);
+  }
+
+  if (target === "github") {
+    const repository = readCliFlag(createArgs, ["--repo", "-r"]);
+    const parsedRepository = parseGitHubRepository(repository);
+    const title = readCliFlag(createArgs, ["--title"]);
+    const description = readCliFlag(createArgs, ["--description", "--body"]) || "";
+    const descriptionFile = readCliFlag(createArgs, [
+      "--description-file",
+      "--body-file",
+      "-f",
+    ]);
+    const labels = readCliListFlags(createArgs, ["--label", "--labels", "-l"]);
+    const assignees = readCliListFlags(createArgs, ["--assignee", "--assignees"]);
+
+    if (!parsedRepository) {
+      console.error("! error: missing or invalid GitHub repository");
+      console.error("  usage: grog create github --repo OWNER/REPO --title \"Title\"");
+      process.exit(1);
+    }
+    if (!title) {
+      console.error("! error: missing GitHub issue title");
+      console.error("  usage: grog create github --repo OWNER/REPO --title \"Title\"");
+      process.exit(1);
+    }
+
+    let body = description;
+    if (descriptionFile) {
+      try {
+        body = readFileSync(descriptionFile, "utf-8");
+      } catch (err) {
+        console.error(`! error: could not read description file: ${err.message}`);
+        process.exit(1);
+      }
+    }
+
+    requireGhToken();
+
+    try {
+      console.log(`> creating GitHub issue in ${parsedRepository.fullName}...`);
+      const issue = await createGitHubIssue({
+        token: GH_TOKEN,
+        repository: parsedRepository.fullName,
+        title,
+        body: body.trim(),
+        labels,
+        assignees,
+      });
+      console.log(`> issue created: ${parsedRepository.fullName}#${issue.number} ${issue.title}`);
+      console.log(`> ${issue.html_url}`);
+    } catch (error) {
+      console.error("! error:", error.message);
+      process.exit(1);
+    }
+    return;
   }
 
   const teamKey = readCliFlag(createArgs, ["--team", "-t"]);
@@ -3151,6 +3331,68 @@ async function handleTelegramSendImage(args) {
     console.log(`> image sent to Telegram${target ? ` (${target.label})` : ""}`);
   } catch (err) {
     console.error(`! error: failed to send image: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Send a document with optional caption to Telegram
+ * Usage: grog telegram-send-document [--to contact] <file-path> [caption]
+ */
+async function handleTelegramSendDocument(args) {
+  const { to, rest } = parseRecipientArgs(args);
+  const state = loadTelegramState();
+  const target = to ? resolveAddressBookTarget("telegram", to) : null;
+  const chatId = target?.value || state.chatId || TELEGRAM_CHAT_ID;
+
+  if (!chatId) {
+    console.error('! error: no chat ID — run "grog talk" first');
+    process.exit(1);
+  }
+
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error("! error: TELEGRAM_BOT_TOKEN not set in .env");
+    process.exit(1);
+  }
+
+  const documentPath = rest[0];
+  const caption = rest.slice(1).join(" ");
+
+  if (!documentPath) {
+    console.error("! error: missing document path");
+    console.error("  usage: grog telegram-send-document [--to contact] <file-path> [caption]");
+    process.exit(1);
+  }
+
+  if (!existsSync(documentPath) || !statSync(documentPath).isFile()) {
+    console.error(`! error: file not found: ${documentPath}`);
+    process.exit(1);
+  }
+
+  const curlArgs = [
+    "-sS",
+    "-X",
+    "POST",
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`,
+    "-F",
+    `chat_id=${chatId}`,
+    "-F",
+    `document=@${documentPath}`,
+  ];
+  if (caption) curlArgs.push("-F", `caption=${caption}`);
+
+  try {
+    const result = execFileSync("curl", curlArgs, { encoding: "utf-8" });
+    const data = JSON.parse(result);
+
+    if (!data.ok) {
+      console.error(`! error: Telegram API error: ${data.description}`);
+      process.exit(1);
+    }
+
+    console.log(`> document sent to Telegram${target ? ` (${target.label})` : ""}`);
+  } catch (err) {
+    console.error(`! error: failed to send document: ${err.message}`);
     process.exit(1);
   }
 }
@@ -4156,69 +4398,145 @@ function resolveChannelAndArgs(rawArgs) {
   return { channel, rest };
 }
 
+function isHelpToken(value) {
+  return value === "help" || value === "--help" || value === "-h";
+}
+
+const COMMAND_HELP = {
+  help: "grog help",
+  solve: "grog solve <github-or-linear-issue-url>",
+  explore: "grog explore <github-repo-or-project-url|linear-url>",
+  review: "grog review <github-pr-url>",
+  answer: "grog answer <issue-url> <path-to-summary-file> [--image path]",
+  create: "grog create github --repo OWNER/REPO --title \"Title\" [--body \"text\" | --body-file file]\n         grog create linear --team TEAM --title \"Title\" [--description \"text\" | --description-file file]",
+  jam: "grog jam https://jam.dev/c/<id> [--open] [--telegram] [--json] [--screenshot [file]]",
+  start: "grog start <linear-issue-url-or-identifier>",
+  done: "grog done <linear-issue-url-or-identifier>",
+  cancel: "grog cancel <linear-issue-url-or-identifier>",
+  contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID]",
+  talk: "grog talk [--whatsapp|--telegram|--discord] [--all]",
+  recv: "grog recv [--whatsapp|--telegram|--discord] [--all]",
+  send: "grog send [--whatsapp|--telegram|--discord] [--to contact] <message-or-file-path>",
+  notify: "grog notify [--whatsapp|--telegram|--discord] [--to contact] <message>",
+  prompt: "grog prompt <message>",
+  "telegram-send": "grog telegram-send [--to contact] <message-or-file-path>",
+  "telegram-recv": "grog telegram-recv",
+  "telegram-send-image": "grog telegram-send-image [--to contact] <image-path> [caption]",
+  "telegram-send-document": "grog telegram-send-document [--to contact] <file-path> [caption]",
+  "whatsapp-talk": "grog whatsapp-talk",
+  "whatsapp-recv": "grog whatsapp-recv",
+  "whatsapp-send": "grog whatsapp-send [--to contact] <message-or-file-path>",
+  "whatsapp-send-image": "grog whatsapp-send-image [--to contact] <image-path> [caption]",
+  "whatsapp-notify": "grog whatsapp-notify [--to contact] <message>",
+  "discord-talk": "grog discord-talk [--all]",
+  "discord-read": "grog discord-read [--all] [--channel ID] [--limit N]",
+  "discord-channels": "grog discord-channels",
+  "discord-servers": "grog discord-servers",
+  "discord-recv": "grog discord-recv [--all]",
+  "discord-send": "grog discord-send [--channel ID|--to contact] <message-or-file-path>",
+};
+
+function printHelp() {
+  console.log("");
+  boxHeader("GROG");
+  console.log("");
+  console.log("  usage:");
+  console.log("    grog help                     show this help");
+  console.log("    grog solve <issue-url>        fetch and solve a single issue (GitHub or Linear)");
+  console.log("    grog explore <url>            list all issues for batch processing (GitHub or Linear)");
+  console.log("    grog review <pr-url>          fetch PR details for code review (GitHub only)");
+  console.log("    grog answer <url> <file>      post a summary comment (GitHub or Linear)");
+  console.log("    grog create github --repo OWNER/REPO --title \"Title\" [--body \"text\" | --body-file file]");
+  console.log("    grog create linear --team TEAM --title \"Title\" [--description \"text\" | --description-file file]");
+  console.log("    grog jam <jam-url>            inspect/open a Jam.dev report");
+  console.log("    grog start <issue-url|id>     mark a Linear issue as In Progress");
+  console.log("    grog done <issue-url|id>      mark a Linear issue as Done");
+  console.log("    grog cancel <issue-url|id>    mark a Linear issue as Canceled");
+  console.log("    grog contacts list            list saved messaging contacts");
+  console.log("    grog talk                     connect a messaging bridge for remote interaction");
+  console.log("    grog recv                     wait for the next inbound message");
+  console.log("    grog send [--to contact] <msg> send a message on the configured channel");
+  console.log("    grog notify <message>         send a quick messaging notification");
+  console.log("    grog telegram-send --to me \"Message\"");
+  console.log("    grog telegram-send-document --to me /tmp/file.html [caption]");
+  console.log("    grog telegram-send-image --to me /tmp/shot.png [caption]");
+  console.log("    grog discord-read             read recent Discord messages and attachments");
+  console.log("    grog discord-channels         list every discovered Discord server and channel");
+  console.log("");
+  console.log("  github examples:");
+  console.log("    grog solve https://github.com/owner/repo/issues/123");
+  console.log("    grog explore https://github.com/owner/repo");
+  console.log("    grog explore https://github.com/orgs/myorg/projects/1");
+  console.log("    grog review https://github.com/owner/repo/pull/123");
+  console.log("    grog answer https://github.com/owner/repo/issues/123 /tmp/summary.md");
+  console.log("    grog create github --repo owner/repo --title \"Bug title\" [--body \"text\" | --body-file file]");
+  console.log("");
+  console.log("  linear examples:");
+  console.log("    grog solve https://linear.app/workspace/issue/PROJ-123");
+  console.log("    grog explore https://linear.app/workspace/team/PROJ");
+  console.log("    grog explore https://linear.app/workspace");
+  console.log("    grog create linear --team PROJ --title \"Title\" [--description \"text\" | --description-file file]");
+  console.log("    grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md");
+  console.log("    grog start https://linear.app/workspace/issue/PROJ-123");
+  console.log("    grog done https://linear.app/workspace/issue/PROJ-123");
+  console.log("    grog cancel https://linear.app/workspace/issue/PROJ-123");
+  console.log("");
+  console.log("  jam examples:");
+  console.log("    grog jam https://jam.dev/c/abcd-1234");
+  console.log("    grog jam https://jam.dev/c/abcd-1234 --screenshot");
+  console.log("    grog jam https://jam.dev/c/abcd-1234 --open");
+  console.log("    grog jam https://jam.dev/c/abcd-1234 --telegram");
+  console.log("");
+  console.log("  messaging examples:");
+  console.log("    grog notify --whatsapp --to me \"Message\"");
+  console.log("    grog whatsapp-send-image --to me /tmp/screenshot.png \"Caption\"");
+  console.log("    grog telegram-send --to me \"Message\"");
+  console.log("    grog telegram-send-document --to me /tmp/export.csv \"Optional caption\"");
+  console.log("    grog discord-channels");
+  console.log("    grog discord-read --all --limit 20");
+  console.log("    grog discord-recv --all");
+  console.log("    grog discord-read --channel 123456789012345678 --limit 20");
+  console.log("    grog discord-send --channel 123456789012345678 \"Message\"");
+  console.log("");
+  console.log("  command help:");
+  console.log("    grog help");
+  console.log("    grog --help");
+  console.log("    grog <command> --help");
+  console.log("");
+}
+
+function printCommandHelp(command) {
+  const usage = COMMAND_HELP[command];
+  if (!usage) {
+    console.error(`! error: unknown command '${command}'`);
+    console.log("  run: grog help");
+    process.exit(1);
+  }
+  console.log(`  usage: ${usage}`);
+}
+
 /**
  * Main function
  */
 async function main() {
-  const command = process.argv[2];
-  const url = process.argv[3];
+  const args = process.argv.slice(2);
+  if (args.length === 0 || isHelpToken(args[0])) {
+    printHelp();
+    process.exit(0);
+  }
 
-  if (!command) {
-    console.log("");
-    boxHeader("GROG");
-    console.log("");
-    console.log("  usage:");
-    console.log("    grog solve <issue-url>          fetch and solve a single issue (GitHub or Linear)");
-    console.log("    grog explore <url>              list all issues for batch processing (GitHub or Linear)");
-    console.log("    grog review <pr-url>            fetch PR details for code review (GitHub only)");
-    console.log("    grog answer <url> <file>        post a summary comment (GitHub or Linear)");
-    console.log("    grog create linear --team TEAM --title \"Title\" [--description-file file]");
-    console.log("    grog jam <jam-url>              inspect/open a Jam.dev report");
-    console.log("    grog start <issue-url|id>       mark a Linear issue as In Progress");
-    console.log("    grog done <issue-url|id>        mark a Linear issue as Done");
-    console.log("    grog talk                       connect a messaging bridge for remote interaction");
-    console.log("    grog notify <message>           send a quick messaging notification");
-    console.log("    grog discord-read               read recent Discord messages and attachments");
-    console.log("    grog discord-channels           list every discovered Discord server and channel");
-    console.log("    grog contacts list              list saved messaging contacts");
-    console.log("    grog contacts save team --discord 123456789012345678");
-    console.log("");
-    console.log("  github examples:");
-    console.log("    grog solve https://github.com/owner/repo/issues/123");
-    console.log("    grog explore https://github.com/owner/repo");
-    console.log("    grog explore https://github.com/orgs/myorg/projects/1");
-    console.log("    grog review https://github.com/owner/repo/pull/123");
-    console.log("    grog answer https://github.com/owner/repo/issues/123 /tmp/summary.md");
-    console.log("");
-    console.log("  linear examples:");
-    console.log("    grog solve https://linear.app/workspace/issue/PROJ-123");
-    console.log("    grog explore https://linear.app/workspace/team/PROJ");
-    console.log("    grog explore https://linear.app/workspace");
-    console.log("    grog create linear --team PROJ --title \"Bug title\" --description-file /tmp/body.md");
-    console.log("    grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md");
-    console.log("    grog start https://linear.app/workspace/issue/PROJ-123");
-    console.log("    grog done https://linear.app/workspace/issue/PROJ-123");
-    console.log("");
-    console.log("  jam examples:");
-    console.log("    grog jam https://jam.dev/c/abcd-1234");
-    console.log("    grog jam https://jam.dev/c/abcd-1234 --screenshot");
-    console.log("    grog jam https://jam.dev/c/abcd-1234 --open");
-    console.log("    grog jam https://jam.dev/c/abcd-1234 --telegram");
-    console.log("");
-    console.log("  messaging examples:");
-    console.log("    grog notify --whatsapp --to me \"Message\"");
-    console.log("    grog whatsapp-send-image --to me /tmp/screenshot.png \"Caption\"");
-    console.log("    grog telegram-send --to me \"Message\"");
-    console.log("    grog discord-channels");
-    console.log("    grog discord-read --all --limit 20");
-    console.log("    grog discord-recv --all");
-    console.log("    grog discord-read --channel 123456789012345678 --limit 20");
-    console.log("    grog discord-send --channel 123456789012345678 \"Message\"");
-    console.log("");
-    process.exit(1);
+  const command = args[0];
+  const url = args[1];
+  if (args.slice(1).some((value) => value === "--help" || value === "-h")) {
+    printCommandHelp(command);
+    process.exit(0);
   }
 
   switch (command) {
+    case "help":
+      printHelp();
+      break;
+
     case "solve":
       if (!url) {
         console.error("! error: missing issue URL");
@@ -4262,7 +4580,8 @@ async function main() {
       const createArgs = process.argv.slice(3);
       if (createArgs.length === 0) {
         console.error("! error: missing create target");
-        console.log("  usage: grog create linear --team TEAM --title \"Title\" [--description-file file]");
+        console.log("  usage: grog create github --repo OWNER/REPO --title \"Title\" [--body \"text\" | --body-file file]");
+        console.log("         grog create linear --team TEAM --title \"Title\" [--description \"text\" | --description-file file]");
         process.exit(1);
       }
       await handleCreate(createArgs);
@@ -4301,6 +4620,15 @@ async function main() {
         process.exit(1);
       }
       await handleStart(url);
+      break;
+
+    case "cancel":
+      if (!url) {
+        console.error("! error: missing Linear issue URL or identifier");
+        console.log("  usage: grog cancel <linear-issue-url-or-identifier>");
+        process.exit(1);
+      }
+      await handleCancel(url);
       break;
 
     case "talk": {
@@ -4453,6 +4781,17 @@ async function main() {
       break;
     }
 
+    case "telegram-send-document": {
+      const documentArgs = process.argv.slice(3);
+      if (documentArgs.length === 0) {
+        console.error("! error: missing document path");
+        console.error("  usage: grog telegram-send-document [--to contact] <file-path> [caption]");
+        process.exit(1);
+      }
+      await handleTelegramSendDocument(documentArgs);
+      break;
+    }
+
     default:
       // Backwards compatibility: if the argument looks like a URL, auto-detect command
       if (command.includes("linear.app") && command.includes("/issue/")) {
@@ -4469,7 +4808,7 @@ async function main() {
         await handleJam([command]);
       } else {
         console.error(`! error: unknown command '${command}'`);
-        console.log("  available: solve, explore, review, answer, create, jam, start, done, contacts, talk, recv, send, discord-read, discord-channels");
+        console.log("  run: grog help");
         process.exit(1);
       }
   }

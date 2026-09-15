@@ -8,10 +8,11 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 - `grog explore <url>` lists GitHub or Linear issues for batch work.
 - `grog review <pr-url>` fetches GitHub pull request context for review.
 - `grog answer <issue-or-pr-url> <file>` posts a summary comment to GitHub or Linear.
-- `grog create linear --team TEAM --title "Title" [--description-file file]` creates Linear issues.
+- `grog create linear --team TEAM --title "Title" [--description "text" | --description-file file]` creates Linear issues.
 - `grog jam <jam-url>` inspects Jam.dev reports.
 - `grog start <issue-url|id>` marks Linear issues In Progress.
 - `grog done <issue-url|id>` marks Linear issues Done.
+- `grog cancel <issue-url|id>` marks Linear issues Canceled.
 - `grog contacts ...` manages Telegram, WhatsApp, and Discord address book entries.
 
 ## Messaging Bridge

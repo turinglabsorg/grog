@@ -1,7 +1,7 @@
 {
   "name": "grog",
   "version": "1.0.0",
-  "description": "GitHub issue fetcher - downloads issue title and description",
+  "description": "GitHub and Linear issue workflow and messaging CLI",
   "main": "index.js",
   "bin": {
     "grog": "./index.js"

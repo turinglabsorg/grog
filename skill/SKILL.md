@@ -20,7 +20,7 @@ Lists all open issues from a repository or GitHub Project, grouped by labels or 
 
 Posts a summary comment to a GitHub issue, GitHub pull request, or Linear issue. For Linear issues, image paths can be uploaded and appended to the posted comment with `--image`.
 
-### `/grog-create linear --team <team-key> --title <title> [--description-file <file>]`
+### `/grog-create linear --team <team-key> --title <title> [--description "text" | --description-file <file>]`
 
 Creates a Linear issue in the configured workspace. The project must declare the workspace in its `.grog` file, and the Linear API key must be configured in `~/.grog/config.json`.
 
@@ -74,7 +74,7 @@ Open any Claude Code session and type:
 /grog-explore https://github.com/owner/repo
 /grog-answer https://github.com/owner/repo/issues/123   # or /pull/456
 /grog-answer https://linear.app/workspace/issue/PROJ-123 --image /tmp/screenshot.png
-/grog-create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
+/grog-create linear --team PROJ --title "Bug title" --description "Short body"
 /grog-talk
 ```
 

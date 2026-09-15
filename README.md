@@ -209,7 +209,7 @@ Then in any Claude Code session:
 /grog-solve https://linear.app/workspace/issue/PROJ-123
 /grog-explore https://linear.app/workspace/team/PROJ
 /grog-explore https://linear.app/workspace
-/grog-create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
+/grog-create linear --team PROJ --title "Bug title" --description "Short body"
 /grog-answer https://linear.app/workspace/issue/PROJ-123
 /grog-answer https://linear.app/workspace/issue/PROJ-123 --image /tmp/screenshot.png
 
@@ -218,10 +218,19 @@ Then in any Claude Code session:
 
 The same commands work for both platforms — grog auto-detects GitHub vs Linear from the URL.
 
-`/grog-create` currently creates Linear issues through the local workspace selected by the project `.grog` file. Example:
+`/grog-create` currently creates Linear issues through the local workspace selected by the project `.grog` file. Pass the body inline with `--description`, or read it from a file with `--description-file`:
 
 ```bash
+node ~/.claude/tools/grog/index.js create linear --team PROJ --title "Bug title" --description "Short body"
 node ~/.claude/tools/grog/index.js create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
+```
+
+`grog start`, `grog done`, and `grog cancel` move a Linear issue to In Progress, Done, or Canceled:
+
+```bash
+node ~/.claude/tools/grog/index.js start PROJ-123
+node ~/.claude/tools/grog/index.js done PROJ-123
+node ~/.claude/tools/grog/index.js cancel PROJ-123
 ```
 
 `grog answer` can upload Linear screenshots and append them to the posted comment:
