@@ -233,6 +233,17 @@ node ~/.claude/tools/grog/index.js done PROJ-123
 node ~/.claude/tools/grog/index.js cancel PROJ-123
 ```
 
+`grog update` edits an issue that already exists — title, description, priority, or parent. It is how a correction reaches an issue instead of becoming a second one:
+
+```bash
+node ~/.claude/tools/grog/index.js update PROJ-123 --title "Corrected title"
+node ~/.claude/tools/grog/index.js update PROJ-123 --description-file /tmp/body.md
+node ~/.claude/tools/grog/index.js update PROJ-123 --priority high
+node ~/.claude/tools/grog/index.js update PROJ-123 --parent none
+```
+
+Pass the body as a file: a description typed inline loses its newlines to the shell. `--parent none` detaches a sub-issue; `--parent PROJ-99` re-files it. Every argument error is refused before the request, so a malformed edit never reaches the tracker half-applied.
+
 `grog answer` can upload Linear screenshots and append them to the posted comment:
 
 ```bash

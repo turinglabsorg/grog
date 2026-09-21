@@ -832,6 +832,60 @@ async function markLinearIssueStarted(identifier) {
   };
 }
 
+
+/**
+ * Update a Linear issue's editable fields.
+ *
+ * The state-changing commands (start/done/cancel) each send their own
+ * issueUpdate with a stateId. This one carries everything a human edits --
+ * title, description, priority, parent -- and is the reason a correction to an
+ * existing issue no longer has to be a new issue.
+ */
+async function updateLinearIssue(identifier, fields) {
+  const issue = await fetchLinearIssue(identifier);
+
+  const input = {};
+  if (typeof fields.title === "string") input.title = fields.title;
+  if (typeof fields.description === "string") input.description = fields.description;
+  if (typeof fields.priority === "number") input.priority = fields.priority;
+  // Detaching is a real edit, so null must survive: `parentId: null` clears the
+  // parent, while leaving the key out keeps whatever parent the issue has.
+  if (fields.parentIdentifier === null) input.parentId = null;
+  else if (typeof fields.parentIdentifier === "string") {
+    const parent = await fetchLinearIssue(fields.parentIdentifier);
+    if (!parent) throw new Error(`Parent issue not found: ${fields.parentIdentifier}`);
+    input.parentId = parent.id;
+  }
+
+  if (Object.keys(input).length === 0) {
+    throw new Error("Nothing to update: pass --title, --description, --priority, or --parent");
+  }
+
+  const mutation = `
+    mutation($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) {
+        success
+        issue {
+          id
+          identifier
+          title
+          priority
+          priorityLabel
+          url
+          parent { identifier }
+          state { name type }
+        }
+      }
+    }
+  `;
+
+  const data = await linearGraphQL(mutation, { id: issue.id, input });
+  if (!data.issueUpdate?.success) {
+    throw new Error("Failed to update Linear issue");
+  }
+
+  return { issue: data.issueUpdate.issue, previous: issue, changed: Object.keys(input) };
+}
 async function markLinearIssueCanceled(identifier) {
   const issue = await fetchLinearIssueWithWorkflowStates(identifier);
   const states = issue.team?.states?.nodes || [];
@@ -1978,6 +2032,114 @@ async function handleStart(issueRef) {
   }
 }
 
+
+// Flags that consume the next argument. Without this list the first flag VALUE
+// is mistaken for the issue reference: `grog update --title x` would try to
+// update an issue called "x".
+const UPDATE_VALUE_FLAGS = new Set([
+  "--title",
+  "--description",
+  "--body",
+  "--description-file",
+  "--body-file",
+  "-f",
+  "--priority",
+  "-p",
+  "--parent",
+]);
+
+function readUpdateIssueRef(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("-")) {
+      if (UPDATE_VALUE_FLAGS.has(arg)) i++;
+      continue;
+    }
+    return arg;
+  }
+  return undefined;
+}
+
+async function handleUpdate(args) {
+  const issueRef = readUpdateIssueRef(args);
+  if (!issueRef) {
+    console.error("! error: missing Linear issue reference");
+    console.error("  usage: grog update <issue-url|id> [--title \"Title\"] [--description \"text\" | --description-file file] [--priority urgent|high|medium|low|none] [--parent ID|none]");
+    process.exit(1);
+  }
+  if (detectPlatform(issueRef) && detectPlatform(issueRef) !== "linear") {
+    console.error("! error: update only supports Linear issues");
+    process.exit(1);
+  }
+
+  const identifier = parseLinearIssueIdentifier(issueRef);
+  if (!identifier) {
+    console.error("! error: invalid Linear issue reference");
+    console.error("  examples:");
+    console.error("    grog update PROJ-123 --title \"New title\"");
+    console.error("    grog update https://linear.app/workspace/issue/PROJ-123 --description-file /tmp/body.md");
+    process.exit(1);
+  }
+
+  const fields = {};
+  const title = readCliFlag(args, ["--title"]);
+  if (title !== undefined) fields.title = title;
+
+  const description = readCliFlag(args, ["--description", "--body"]);
+  const descriptionFile = readCliFlag(args, ["--description-file", "--body-file", "-f"]);
+  if (descriptionFile) {
+    try {
+      fields.description = readFileSync(descriptionFile, "utf-8").trim();
+    } catch (err) {
+      console.error(`! error: could not read description file: ${err.message}`);
+      process.exit(1);
+    }
+  } else if (description !== undefined) {
+    fields.description = description;
+  }
+
+  const priority = readCliFlag(args, ["--priority", "-p"]);
+  if (priority !== undefined) {
+    try {
+      fields.priority = parseLinearPriority(priority);
+    } catch (err) {
+      console.error(`! error: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
+  const parent = readCliFlag(args, ["--parent"]);
+  if (parent !== undefined) {
+    // "none" is how a shell says null: an issue wrongly filed under another one
+    // is detached with --parent none.
+    fields.parentIdentifier = /^(none|null|-)$/i.test(parent)
+      ? null
+      : parseLinearIssueIdentifier(parent) || parent;
+  }
+
+  if (Object.keys(fields).length === 0) {
+    console.error("! error: Nothing to update: pass --title, --description, --priority, or --parent");
+    process.exit(1);
+  }
+
+  requireLinearToken();
+
+  try {
+    console.log(`> updating Linear issue ${identifier}...`);
+    const result = await updateLinearIssue(identifier, fields);
+    console.log("");
+    boxHeader(`${result.issue.identifier}: ${result.issue.title || ""}`);
+    console.log("");
+    field("updated", result.changed.join(", "));
+    field("priority", result.issue.priorityLabel || String(result.issue.priority ?? ""));
+    field("parent", result.issue.parent?.identifier || "(none)");
+    field("state", result.issue.state?.name || "");
+    field("url", result.issue.url || "");
+  } catch (error) {
+    console.error("! error:", error.message);
+    process.exit(1);
+  }
+}
 async function handleCancel(issueRef) {
   if (detectPlatform(issueRef) && detectPlatform(issueRef) !== "linear") {
     console.error("! error: cancel only supports Linear issues");
@@ -4409,6 +4571,7 @@ const COMMAND_HELP = {
   review: "grog review <github-pr-url>",
   answer: "grog answer <issue-url> <path-to-summary-file> [--image path]",
   create: "grog create github --repo OWNER/REPO --title \"Title\" [--body \"text\" | --body-file file]\n         grog create linear --team TEAM --title \"Title\" [--description \"text\" | --description-file file]",
+  update: "grog update <linear-issue-url-or-identifier> [--title \"Title\"] [--description \"text\" | --description-file file] [--priority urgent|high|medium|low|none] [--parent ID|none]",
   jam: "grog jam https://jam.dev/c/<id> [--open] [--telegram] [--json] [--screenshot [file]]",
   start: "grog start <linear-issue-url-or-identifier>",
   done: "grog done <linear-issue-url-or-identifier>",
@@ -4448,6 +4611,7 @@ function printHelp() {
   console.log("    grog answer <url> <file>      post a summary comment (GitHub or Linear)");
   console.log("    grog create github --repo OWNER/REPO --title \"Title\" [--body \"text\" | --body-file file]");
   console.log("    grog create linear --team TEAM --title \"Title\" [--description \"text\" | --description-file file]");
+  console.log("    grog update <issue-url|id>    edit a Linear issue (title, body, priority, parent)");
   console.log("    grog jam <jam-url>            inspect/open a Jam.dev report");
   console.log("    grog start <issue-url|id>     mark a Linear issue as In Progress");
   console.log("    grog done <issue-url|id>      mark a Linear issue as Done");
@@ -4476,6 +4640,8 @@ function printHelp() {
   console.log("    grog explore https://linear.app/workspace/team/PROJ");
   console.log("    grog explore https://linear.app/workspace");
   console.log("    grog create linear --team PROJ --title \"Title\" [--description \"text\" | --description-file file]");
+  console.log("    grog update PROJ-123 --title \"New title\" --description-file /tmp/body.md");
+  console.log("    grog update PROJ-123 --priority high --parent none");
   console.log("    grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md");
   console.log("    grog start https://linear.app/workspace/issue/PROJ-123");
   console.log("    grog done https://linear.app/workspace/issue/PROJ-123");
@@ -4630,6 +4796,11 @@ async function main() {
       }
       await handleCancel(url);
       break;
+
+    case "update": {
+      await handleUpdate(process.argv.slice(3));
+      break;
+    }
 
     case "talk": {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));

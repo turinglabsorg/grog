@@ -9,6 +9,7 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 - `grog review <pr-url>` fetches GitHub pull request context for review.
 - `grog answer <issue-or-pr-url> <file>` posts a summary comment to GitHub or Linear.
 - `grog create linear --team TEAM --title "Title" [--description "text" | --description-file file]` creates Linear issues.
+- `grog update <issue-url|id> [--title "Title"] [--description "text" | --description-file file] [--priority urgent|high|medium|low|none] [--parent ID|none]` edits an existing Linear issue. `--parent none` detaches a sub-issue. The state commands below each send their own `stateId`; this is the only command that edits what a human wrote, so every argument error is refused before the request rather than after a partial edit reaches the tracker.
 - `grog jam <jam-url>` inspects Jam.dev reports.
 - `grog start <issue-url|id>` marks Linear issues In Progress.
 - `grog done <issue-url|id>` marks Linear issues Done.
@@ -97,5 +98,6 @@ Important keys:
 - Keep `skill/index.js` aligned with the installed runtime when local fixes have been made in `~/.codex/tools/grog/index.js`.
 - After CLI changes, run `node --check skill/index.js`.
 - Run `npm test --prefix skill` after Discord client changes.
+- `skill/linear-update.test.js` covers `grog update`: every case asserts the refusal happens before the network, because a malformed edit that reaches Linear has already changed a client's tracker.
 - Runtime-test messaging changes against the real bridge when credentials are available.
 - Do not print or commit tokens, chat IDs, or contact phone numbers except placeholder examples.
