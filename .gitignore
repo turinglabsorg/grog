@@ -1,10 +1,4 @@
 node_modules/
 .env
 .claude/
-downloads/
-shared/dist/
-api/dist/
-agent/dist/
-app/dist/
 skill/dist/
-gh/

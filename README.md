@@ -1,329 +1,121 @@
 # Grog
 
-Grog is an autonomous GitHub and Linear issue solver. Point it at an issue, and it uses Claude to analyze code, implement fixes, and open pull requests — without human intervention. Works with both GitHub and Linear — the tool auto-detects the platform from the URL.
+Grog is a local CLI and Claude/Codex skill for GitHub issues, Linear issues, pull requests, Jam.dev reports, and Telegram, WhatsApp, and Discord messaging.
 
-## How It Works
+It runs on your machine. Credentials stay in `~/.grog/config.json`. The CLI talks to GitHub, Linear, and the messaging APIs directly.
 
-```
-  @grog-agent[bot] solve this
-          |
-          v
-  GitHub Webhook ──> Agent (Express) ──> MongoDB ──> Claude ──> PR
-```
-
-1. Someone mentions the bot on a GitHub issue (or you create a job from the dashboard)
-2. The webhook hits the agent server
-3. The agent clones the repo, spawns Claude, and works on the fix
-4. You can send messages to the agent mid-work via the dashboard chat — it interrupts and restarts with your input
-5. When done, it pushes a branch and opens a pull request
-6. If the agent needs clarification, it asks — and picks back up when you reply
-
-## Architecture
+## Layout
 
 ```
 grog/
-  shared/   - Shared TypeScript library (types, state, GitHub API, auth, billing)
-  agent/    - Self-hosted agent server (webhook, dashboard, runner, poll loop)
-  api/      - SaaS API server (OAuth, billing, Stripe)
-  app/      - SaaS frontend (React)
-  skill/    - Claude Code CLI skills — GitHub + Linear support (/grog-solve, /grog-explore, /grog-review, /grog-answer, /grog-create, /grog-talk)
-  pm2/      - PM2 ecosystem config for production
+  skill/    CLI (`grog`), skill installer, and tests
 ```
 
-## Deployment Modes
-
-### 1. Self-Host (free)
-
-Run the agent on your own machine. You bring your own Anthropic API key and Claude Code CLI. No billing, no limits — just `yarn dev:agent` and go.
-
-### 2. SaaS with Credits
-
-Hosted by Turing Labs. Pay-per-token via credit packs (Stripe). 10,000 tokens = 1 credit. Credits are automatically deducted after each job completes.
-
-### 3. Dedicated (coming soon)
-
-Dedicated VPS per customer with managed infrastructure.
-
-## Self-Host Setup
-
-### Prerequisites
-
-- **Node.js** 20+
-- **MongoDB** running locally or a connection string
-- **Anthropic API key** (set as `ANTHROPIC_API_KEY` in your shell)
-- **Claude Code CLI** installed (`npm install -g @anthropic-ai/claude-code`)
-
-### Step 1: Create a GitHub App
-
-1. Go to [github.com/settings/apps/new](https://github.com/settings/apps/new)
-2. Fill in:
-   - **GitHub App name**: pick a name (e.g. `my-grog-agent`)
-   - **Homepage URL**: `http://localhost:3000`
-   - **Webhook URL**: your public URL + `/webhook` (or leave blank if polling only)
-   - **Webhook secret**: generate a random string and save it
-3. Set **Permissions**:
-   - Repository > **Contents**: Read and write
-   - Repository > **Issues**: Read and write
-   - Repository > **Pull requests**: Read and write
-   - Repository > **Metadata**: Read-only
-4. **Subscribe to events**:
-   - Issue comment
-   - Issues
-   - Pull request
-5. Click **Create GitHub App**
-6. Note the **App ID** shown at the top of the page
-7. Scroll down and click **Generate a private key** — save the `.pem` file
-
-### Step 2: Install the App
-
-1. Go to `https://github.com/settings/apps/<your-app-name>/installations`
-2. Click **Install**
-3. Select your organization or account
-4. Choose **All repositories** or select specific repos
-5. Click **Install**
-
-### Step 3: Install and Build
+## Install
 
 ```bash
-git clone https://github.com/turinglabsorg/grog.git
-cd grog
-yarn install
-yarn build
+cd skill
+./install.sh
 ```
 
-### Step 4: Configure
+The installer copies the CLI to `~/.claude/tools/grog/`, installs its npm dependencies, and writes the skill definitions under `~/.claude/skills/`.
+
+## Commands
+
+```text
+grog solve <issue-url>            Fetch a GitHub or Linear issue
+grog explore <url>                List issues for batch work
+grog review <pr-url>              Fetch a GitHub pull request
+grog answer <url> <file>          Post a summary comment
+grog create github --repo OWNER/REPO --title "Title" [--body "text" | --body-file file]
+grog create linear --team TEAM --title "Title" [--description "text" | --description-file file]
+grog update <issue-url|id>        Edit a Linear issue (title, body, priority, parent)
+grog jam <jam-url>                Inspect a Jam.dev report
+grog start <issue-url|id>         Move a Linear issue to In Progress
+grog done <issue-url|id>          Move a Linear issue to Done
+grog cancel <issue-url|id>        Move a Linear issue to Canceled
+grog contacts ...                 Manage the messaging address book
+```
+
+GitHub and Linear are chosen from the URL. Linear writes require a project `.grog` file:
+
+```text
+workspace=KAIROS
+```
+
+grog walks upward from the working directory until it finds that file, then uses `config.linear[KAIROS]`. `GROG_WORKSPACE` overrides the file. If neither is set, Linear calls are refused.
+
+`grog update` edits an issue that already exists. Pass the body with `--description-file` so the shell does not flatten newlines. `--parent none` detaches a sub-issue. Argument errors are refused before the request.
 
 ```bash
-cp agent/.env.example agent/.env
+grog update PROJ-123 --title "Corrected title"
+grog update PROJ-123 --description-file /tmp/body.md
+grog update PROJ-123 --priority high
+grog update PROJ-123 --parent none
+grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md --image /tmp/screenshot.png
 ```
 
-Edit `agent/.env`:
+The same entry points exist as skills: `/grog-solve`, `/grog-explore`, `/grog-review`, `/grog-answer`, `/grog-create`, `/grog-talk`.
 
-```env
-# MongoDB connection
-MONGODB_URI=mongodb://localhost:27017/grog
+## Messaging
 
-# Server port
-PORT=3000
-
-# Max parallel jobs (default: 2)
-MAX_CONCURRENT_JOBS=2
-
-# Working directory for cloned repos
-WORK_DIR=/tmp/grog-jobs
-
-# Agent timeout in minutes (default: 30)
-AGENT_TIMEOUT_MINUTES=30
+```text
+grog talk [--telegram|--whatsapp|--discord]
+grog recv [--telegram|--whatsapp|--discord]
+grog send [--telegram|--whatsapp|--discord] [--to contact] <message-or-file>
+grog notify [--telegram|--whatsapp|--discord] [--to contact] <message>
+grog telegram-send, grog telegram-recv, grog telegram-send-image, grog telegram-send-document
+grog whatsapp-talk, grog whatsapp-recv, grog whatsapp-send, grog whatsapp-send-image, grog whatsapp-notify
+grog discord-talk, grog discord-channels, grog discord-read, grog discord-recv, grog discord-send
 ```
 
-You do **not** need `GH_TOKEN` or `WEBHOOK_SECRET` in the `.env` — these are configured through the dashboard.
+Channel selection is the CLI flag, then `GROG_CHANNEL`, then `channel` in `~/.grog/config.json`, then Telegram.
 
-### Step 5: Start the Agent
+Inline text is for single-line messages. Multiline messages go in a UTF-8 file, and the command receives the file path. Discord `talk`, `read`, and `recv` accept `--all` for every server the bot can see. Receive uses the Discord Gateway and remembers the source channel for the next reply. `discordChannelId` is an optional default.
 
-```bash
-yarn dev:agent
-```
+Telegram attachments land in `/tmp/grog-telegram-files`. Discord attachments land in `/tmp/grog-discord-files`.
 
-### Step 6: Connect via Dashboard
-
-1. Open [http://localhost:3000](http://localhost:3000)
-2. You'll see the **Connect GitHub App** setup screen
-3. Enter your **App ID** (from Step 1)
-4. Paste the contents of your **private key** `.pem` file
-5. Optionally enter your **webhook secret**
-6. Click **Connect**
-
-The dashboard will verify the connection and show the rate limit (should be 5,000/hr).
-
-### Step 7: Use It
-
-On any issue in a repo where the app is installed, comment:
-
-```
-@your-app-name[bot] solve this
-```
-
-The agent will pick it up, work on it, and open a PR.
-
-## Follow-up Loop
-
-When the agent can't solve an issue on the first pass, it posts a comment asking for clarification and sets the job to `waiting_for_reply`. When you reply and mention the bot again, the agent re-runs with the full conversation — the new reply is highlighted so Claude knows exactly what changed.
-
-## Dashboard
-
-The agent includes a built-in terminal-style dashboard at `http://localhost:3000`:
-
-- **Job list** — all jobs with status, repo, issue, age, token usage
-- **Live terminal** — click any job to see real-time Claude output (SSE streaming)
-- **Stop/Start** — pause and resume jobs from the terminal panel
-- **Dashboard chat** — send messages to a running agent from the terminal panel. Messages interrupt the current turn and the agent restarts with your message in context
-- **Create jobs** — click the `+` button to create a job from any GitHub issue URL or repo URL. If you provide just a repo URL, Grog creates a GitHub issue first
-- **Budget display** — token usage tracking with hourly/daily limits in the header
-- **App status** — shows connected GitHub App with disconnect option
-
-## Production Deployment (PM2)
-
-```bash
-yarn build
-pm2 start pm2/ecosystem.config.cjs
-```
-
-For webhooks to work in production, your agent needs a public URL. Set the webhook URL in your GitHub App settings to point to `https://your-domain.com/webhook`.
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `MONGODB_URI` | No | `mongodb://localhost:27017/grog` | MongoDB connection |
-| `PORT` | No | `3000` | Server port |
-| `MAX_CONCURRENT_JOBS` | No | `2` | Max parallel jobs |
-| `WORK_DIR` | No | `/tmp/grog-jobs` | Temp directory for repos |
-| `AGENT_TIMEOUT_MINUTES` | No | `30` | Max time per job |
-| `MAX_RETRIES` | No | `2` | Retries for transient failures |
-| `DAILY_TOKEN_BUDGET` | No | `0` (unlimited) | Daily token limit |
-| `HOURLY_TOKEN_BUDGET` | No | `0` (unlimited) | Hourly token limit |
-| `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, `error` |
-| `LOG_FORMAT` | No | human-readable | Set to `json` for structured output |
-| `STRIPE_SECRET_KEY` | No | — | Enable billing (SaaS mode) |
-
-The GitHub App credentials (App ID, private key, installation ID) are stored in MongoDB and configured through the dashboard — no need to put them in `.env`.
-
-## CLI Skills
-
-Install Claude Code skills for local issue solving:
-
-```bash
-cd skill && ./install.sh
-```
-
-Then in any Claude Code session:
-
-```
-# GitHub
-/grog-solve https://github.com/owner/repo/issues/123
-/grog-explore https://github.com/owner/repo
-/grog-review https://github.com/owner/repo/pull/456
-/grog-answer https://github.com/owner/repo/issues/123
-
-# Linear
-/grog-solve https://linear.app/workspace/issue/PROJ-123
-/grog-explore https://linear.app/workspace/team/PROJ
-/grog-explore https://linear.app/workspace
-/grog-create linear --team PROJ --title "Bug title" --description "Short body"
-/grog-answer https://linear.app/workspace/issue/PROJ-123
-/grog-answer https://linear.app/workspace/issue/PROJ-123 --image /tmp/screenshot.png
-
-/grog-talk
-```
-
-The same commands work for both platforms — grog auto-detects GitHub vs Linear from the URL.
-
-`/grog-create` currently creates Linear issues through the local workspace selected by the project `.grog` file. Pass the body inline with `--description`, or read it from a file with `--description-file`:
-
-```bash
-node ~/.claude/tools/grog/index.js create linear --team PROJ --title "Bug title" --description "Short body"
-node ~/.claude/tools/grog/index.js create linear --team PROJ --title "Bug title" --description-file /tmp/body.md
-```
-
-`grog start`, `grog done`, and `grog cancel` move a Linear issue to In Progress, Done, or Canceled:
-
-```bash
-node ~/.claude/tools/grog/index.js start PROJ-123
-node ~/.claude/tools/grog/index.js done PROJ-123
-node ~/.claude/tools/grog/index.js cancel PROJ-123
-```
-
-`grog update` edits an issue that already exists — title, description, priority, or parent. It is how a correction reaches an issue instead of becoming a second one:
-
-```bash
-node ~/.claude/tools/grog/index.js update PROJ-123 --title "Corrected title"
-node ~/.claude/tools/grog/index.js update PROJ-123 --description-file /tmp/body.md
-node ~/.claude/tools/grog/index.js update PROJ-123 --priority high
-node ~/.claude/tools/grog/index.js update PROJ-123 --parent none
-```
-
-Pass the body as a file: a description typed inline loses its newlines to the shell. `--parent none` detaches a sub-issue; `--parent PROJ-99` re-files it. Every argument error is refused before the request, so a malformed edit never reaches the tracker half-applied.
-
-`grog answer` can upload Linear screenshots and append them to the posted comment:
-
-```bash
-node ~/.claude/tools/grog/index.js answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md --image /tmp/screenshot.png
-```
-
-### Messaging Bridge
-
-`/grog-talk` opens a bidirectional bridge between your Claude Code session and Telegram, WhatsApp, or Discord. Messages received from the selected channel are processed as if they were typed in the terminal.
-
-The CLI also supports generic messaging commands:
-
-```bash
-grog talk --telegram
-grog recv --telegram
-grog send --telegram "Message"
-grog notify --telegram --to me "Message"
-grog contacts save me --whatsapp +393341123870 --telegram 123456
-grog discord-channels
-grog discord-read --all --limit 20
-grog discord-recv --all
-grog discord-read --channel 123456789012345678 --limit 20
-grog send --discord --channel 123456789012345678 "Message"
-```
-
-Telegram receive saves document and photo attachments to `/tmp/grog-telegram-files`. Markdown and other text documents are printed to stdout with their saved path, which lets an active agent read file attachments instead of receiving only `[non-text message]`.
-
-Setup:
-1. Create a bot at [@BotFather](https://t.me/BotFather)
-2. Run the installer — it asks for the bot token (optional step)
-3. Type `/grog-talk` in Claude Code and message your bot to connect
-
-Discord setup:
-
-1. Create an application and bot in the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Enable `Message Content Intent` under the bot settings so Discord returns message text and attachments.
-3. Invite the bot to each server with `View Channels`, `Read Message History`, and `Send Messages` permissions wherever Grog should operate.
-4. Save `discordBotToken` in `~/.grog/config.json`. `discordChannelId` is optional and only provides a default destination.
-5. Run `grog discord-channels` to inspect discovery, `grog discord-read --all` to read across servers, or `grog discord-recv --all` to wait for new messages.
-
-Discord message reads automatically download attachments to `/tmp/grog-discord-files`. Text-like files are printed inline with their saved path; binary files expose the saved path for local inspection. Automatic mentions are disabled when Grog sends a message.
-
-All-server mode covers every server the bot belongs to, visible text/announcement channels, and active threads. Receive uses the Discord Gateway for real-time events and resumes the prior session between CLI calls instead of polling every channel. The next response is routed to the source channel. Archived threads are picked up again when Discord reactivates them.
-
-### Configuration
-
-All credentials are stored in `~/.grog/config.json`:
+## Configuration
 
 ```json
 {
   "ghToken": "ghp_...",
   "linear": {
     "MTROPRO": "lin_api_...",
-    "KAIROS":  "lin_api_..."
+    "KAIROS": "lin_api_..."
   },
   "telegramBotToken": "123456:ABC...",
   "telegramChatId": "12345678",
   "discordBotToken": "discord-bot-token",
-  "discordChannelId": "123456789012345678"
+  "discordChannelId": "123456789012345678",
+  "zernio": {
+    "apiKey": "...",
+    "whatsappAccountId": "...",
+    "whatsappParticipantId": "...",
+    "whatsappTemplate": { "name": "robin_message_it", "language": "it" }
+  },
+  "addressBook": {},
+  "channel": "telegram"
 }
 ```
 
-- **ghToken** — GitHub Personal Access Token ([create one](https://github.com/settings/tokens))
-- **linear** — one entry per Linear workspace. The key is a logical name you pick (e.g. `MTROPRO`, `KAIROS`); the value is the API key for that workspace ([create keys](https://linear.app/settings/api))
-- **telegramBotToken** / **telegramChatId** — for `/grog-talk` bridge
-- **discordBotToken** / **discordChannelId** — Discord bot credential and optional default destination; omit the channel ID for automatic all-server mode
+`~/.claude/tools/grog/.env` is still read as a legacy fallback. A repo can override the voice with `.grog/config.json`:
 
-### Per-project workspace hint (`.grog`)
-
-Every project that uses grog for Linear MUST have a `.grog` file in its root:
-
-```
-workspace=KAIROS
+```json
+{
+  "personality": {
+    "tone": "formal and professional, no jokes",
+    "style": "concise RFC-like technical writing"
+  }
+}
 ```
 
-grog walks up from the current working directory until it finds one. If no `.grog` is found, **grog refuses to make Linear calls** and exits with an actionable error. This prevents accidental cross-workspace writes.
+## Development
 
-Override order: `GROG_WORKSPACE` env var → `.grog` file → error (no default).
-
-Legacy `.env` files in `~/.claude/tools/grog/.env` are still supported as a fallback.
+```bash
+node --check skill/index.js
+npm test --prefix skill
+```
 
 ## License
 

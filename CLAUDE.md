@@ -111,13 +111,9 @@ bash skill/install.sh
 skill/
   index.js          All CLI commands and messaging orchestration
   discord-client.js Discord REST client and attachment downloader
+  github-issues.js  GitHub issue creation
   install.sh        Installer (copies files, sets up config)
-  package.json      Dependencies (dotenv)
-
-agent/              Self-hosted agent server (webhook, runner, dashboard)
-api/                SaaS API (OAuth, billing)
-app/                SaaS frontend (React + Vite)
-shared/             Shared types, state manager, GitHub API helpers
+  package.json      Dependencies (dotenv, ws)
 ```
 
 ## Personality
