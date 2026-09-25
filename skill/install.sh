@@ -341,6 +341,7 @@ Before doing anything, check if you are already inside the correct repository:
 
 ## What to do with the output
 
+1. If you are inside tmux, name your window after the issue first: `grog tmux-name <issue-url-or-id>`
 1. Run grog solve to fetch the issue
 2. If image paths are shown, use Read tool on EACH image file to view them
 3. Check repository context (see "Repository Detection" above)
@@ -670,6 +671,7 @@ Supported flags:
 1. Write the issue description to a temp markdown file.
 2. Run the command above with the correct team key.
 3. Report the created issue identifier and URL from the command output.
+4. If you are going to work on the new issue (the user asked to create it for the work at hand), name your tmux window after it: `grog tmux-name <IDENTIFIER>` (skip this for a follow-up issue filed while you keep working on another one).
 
 ## Error Handling
 
@@ -683,12 +685,18 @@ echo "  > /grog-create skill"
 cat > "$SKILLS_DIR/grog-tmux/SKILL.md" << 'EOF'
 ---
 name: grog-tmux
-description: Rename the tmux window (tab) you are working in after its issue. Use when the user asks to rename, name or label the tmux session, window or tab (c1, codex, ...) with a Linear issue, a GitHub issue or a PR.
+description: Name the tmux window (tab) you are working in after its issue. Use whenever you start working on an issue ("lavoriamo a <issue>", "risolvi <issue>", an issue link to work on), right after creating the issue you are about to work on, and when the user asks to rename the tmux session, window or tab (c1, codex, ...).
 allowed-tools: Bash
 argument-hint: <linear-issue-url-or-id | github-issue-or-pr-url>
 ---
 
 # GROG tmux - name your window after the issue
+
+Rename first, then do the work:
+
+- The user gives you an issue to work on (`lavoriamo a https://linear.app/.../MTR-1334/...`, `risolvi MTR-1334`, a GitHub issue or PR): rename the window to it before anything else.
+- The user asks you to create a new issue (`crea una nuova issue ...`): create it (grog-create), then rename the window to the identifier `grog create` printed. A follow-up issue filed while you keep working on another one does not rename the window.
+- The user asks to rename the tmux session, window or tab: rename it.
 
 Run exactly one command:
 

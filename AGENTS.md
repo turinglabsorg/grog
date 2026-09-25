@@ -14,7 +14,7 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 - `grog start <issue-url|id>` marks Linear issues In Progress.
 - `grog done <issue-url|id>` marks Linear issues Done.
 - `grog cancel <issue-url|id>` marks Linear issues Canceled.
-- `grog tmux-name <issue-url|id|name>` renames the tmux window the agent works in (the one holding `TMUX_PANE`): a Linear identifier as is, a GitHub issue or PR as `repo#123`, other text trimmed to 40 printable characters. It runs `tmux` without a shell and fails with a message outside tmux. Use it when the user asks to name the tmux window, tab or session after the issue.
+- `grog tmux-name <issue-url|id|name>` renames the tmux window the agent works in (the one holding `TMUX_PANE`): a Linear identifier as is, a GitHub issue or PR as `repo#123`, other text trimmed to 40 printable characters. It runs `tmux` without a shell and fails with a message outside tmux. Use it when the agent starts working on an issue, right after creating the issue it is about to work on, and when the user asks to name the tmux window, tab or session after the issue. Under Codex's shared app-server daemon TMUX_PANE belongs to whichever window started the daemon, so the command refuses there rather than rename another agent's tab; Codex needs `--no-daemon` or `features.daemon_auto_start = false`.
 - `grog contacts ...` manages Telegram, WhatsApp, and Discord address book entries.
 
 ## Messaging Bridge

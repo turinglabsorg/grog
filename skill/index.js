@@ -602,6 +602,32 @@ function tmuxWindowName(ref) {
 }
 
 /**
+ * Whether this command was started by Codex's shared app-server daemon. The
+ * daemon runs every session's commands with the environment of whichever
+ * window first started it, so under it TMUX_PANE names another agent's window.
+ * @returns {boolean}
+ */
+function startedByCodexDaemon() {
+  let pid = process.ppid;
+  for (let depth = 0; pid > 1 && depth < 16; depth++) {
+    let line;
+    try {
+      line = execFileSync("ps", ["-o", "ppid=,command=", "-p", String(pid)], { encoding: "utf8" }).trim();
+    } catch {
+      return false;
+    }
+    const match = line.match(/^(\d+)\s+(.*)$/s);
+    if (!match) return false;
+    // The codex executable itself, run as `codex app-server ...`: a shell whose
+    // command line merely mentions those words is not the daemon.
+    const words = match[2].split(/\s+/);
+    if (basename(words[0]) === "codex" && words.slice(1).includes("app-server")) return true;
+    pid = Number(match[1]);
+  }
+  return false;
+}
+
+/**
  * Rename the tmux window this command runs in. tmux names the pane of the
  * calling process in TMUX_PANE, so the window renamed is the agent's own even
  * when several agents share a session; an agent in a container reaches it
@@ -618,6 +644,14 @@ function handleTmuxName(args) {
   const pane = process.env.TMUX_PANE;
   if (!process.env.TMUX || !pane) {
     console.error("! error: not running inside tmux (TMUX_PANE is not set), so there is no window to rename");
+    process.exit(1);
+  }
+  if (startedByCodexDaemon()) {
+    console.error(
+      "! error: Codex runs this command in its shared app-server daemon, whose TMUX_PANE belongs to another window, " +
+        "so renaming it could rename someone else's tab. Start Codex with --no-daemon, or set " +
+        "features.daemon_auto_start = false in ~/.codex/config.toml and stop the daemon (codex app-server daemon stop).",
+    );
     process.exit(1);
   }
   try {

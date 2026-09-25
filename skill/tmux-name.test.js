@@ -58,6 +58,31 @@ test("refuses outside tmux without calling it", () => {
   assert.equal(result.argv, null);
 });
 
+test("refuses under Codex's shared app-server daemon without calling tmux", () => {
+  rmSync(argvLog, { force: true });
+  // A parent that is `codex ... app-server`, as the daemon is (argv0 codex).
+  const inner = '"$1" "$2" tmux-name MTR-1; exit $?';
+  const result = spawnSync("bash", ["-c", `exec -a codex bash -c '${inner}' app-server "${process.execPath}" "${cliPath}"`], {
+    encoding: "utf8",
+    cwd: scratch,
+    env: { ...process.env, PATH: `${scratch}:${process.env.PATH}`, TMUX: "/tmp/tmux-test,1,0", TMUX_PANE: "%82" },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /shared app-server daemon/);
+  let called = true;
+  try { readFileSync(argvLog); } catch { called = false; }
+  assert.equal(called, false);
+});
+
+test("a shell that merely mentions codex app-server is not the daemon", () => {
+  const result = spawnSync("sh", ["-c", `"${process.execPath}" "${cliPath}" tmux-name MTR-2; exit $? # codex app-server`], {
+    encoding: "utf8",
+    cwd: scratch,
+    env: { ...process.env, PATH: `${scratch}:${process.env.PATH}`, TMUX: "/tmp/tmux-test,1,0", TMUX_PANE: "%63" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test("refuses an empty name", () => {
   const result = run([]);
   assert.equal(result.status, 1);
