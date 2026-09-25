@@ -585,6 +585,50 @@ function parseLinearIssueUrl(url) {
   return { workspace: match[1], identifier: match[2] };
 }
 
+/**
+ * The tmux window name for a work item: a Linear identifier (PROJ-123), a
+ * GitHub issue or PR as repo#123, or any other text as given. Only printable
+ * characters survive, and the name is kept short enough for a status bar.
+ * @param {string} ref
+ * @returns {string}
+ */
+function tmuxWindowName(ref) {
+  const text = String(ref || "").trim();
+  const linear = parseLinearIssueUrl(text)?.identifier || (/^[A-Za-z0-9]+-\d+$/.test(text) ? text.toUpperCase() : null);
+  if (linear) return linear;
+  const github = parseGitHubIssueUrl(text) || parseGitHubPrUrl(text);
+  if (github) return `${github.repo}#${github.issueNumber || github.prNumber}`;
+  return text.replace(/[^\p{L}\p{N}\p{P}\p{S} ]/gu, "").replace(/\s+/g, " ").trim().slice(0, 40);
+}
+
+/**
+ * Rename the tmux window this command runs in. tmux names the pane of the
+ * calling process in TMUX_PANE, so the window renamed is the agent's own even
+ * when several agents share a session; an agent in a container reaches it
+ * because grog runs on the host there.
+ * @param {string[]} args
+ */
+function handleTmuxName(args) {
+  const name = tmuxWindowName(args.join(" "));
+  if (!name) {
+    console.error("! error: missing issue URL, identifier or name");
+    console.log(`  usage: ${COMMAND_HELP["tmux-name"]}`);
+    process.exit(1);
+  }
+  const pane = process.env.TMUX_PANE;
+  if (!process.env.TMUX || !pane) {
+    console.error("! error: not running inside tmux (TMUX_PANE is not set), so there is no window to rename");
+    process.exit(1);
+  }
+  try {
+    execFileSync("tmux", ["rename-window", "-t", pane, name], { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (error) {
+    console.error(`! error: tmux could not rename the window: ${String(error.stderr || error.message).trim()}`);
+    process.exit(1);
+  }
+  console.log(`tmux window renamed: ${name}`);
+}
+
 function parseLinearIssueIdentifier(ref) {
   const parsed = parseLinearIssueUrl(ref);
   if (parsed) return parsed.identifier;
@@ -4576,6 +4620,7 @@ const COMMAND_HELP = {
   start: "grog start <linear-issue-url-or-identifier>",
   done: "grog done <linear-issue-url-or-identifier>",
   cancel: "grog cancel <linear-issue-url-or-identifier>",
+  "tmux-name": "grog tmux-name <linear-issue-url-or-identifier|github-issue-or-pr-url|name>",
   contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID]",
   talk: "grog talk [--whatsapp|--telegram|--discord] [--all]",
   recv: "grog recv [--whatsapp|--telegram|--discord] [--all]",
@@ -4616,6 +4661,7 @@ function printHelp() {
   console.log("    grog start <issue-url|id>     mark a Linear issue as In Progress");
   console.log("    grog done <issue-url|id>      mark a Linear issue as Done");
   console.log("    grog cancel <issue-url|id>    mark a Linear issue as Canceled");
+  console.log("    grog tmux-name <issue|name>   rename the tmux window you are working in (e.g. MTR-1334)");
   console.log("    grog contacts list            list saved messaging contacts");
   console.log("    grog talk                     connect a messaging bridge for remote interaction");
   console.log("    grog recv                     wait for the next inbound message");
@@ -4801,6 +4847,10 @@ async function main() {
       await handleUpdate(process.argv.slice(3));
       break;
     }
+
+    case "tmux-name":
+      handleTmuxName(process.argv.slice(3));
+      break;
 
     case "talk": {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
