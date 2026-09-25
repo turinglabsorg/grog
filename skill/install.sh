@@ -75,6 +75,7 @@ mkdir -p "$SKILLS_DIR/grog-review"
 mkdir -p "$SKILLS_DIR/grog-answer"
 mkdir -p "$SKILLS_DIR/grog-create"
 mkdir -p "$SKILLS_DIR/grog-talk"
+mkdir -p "$SKILLS_DIR/grog-tmux"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo "  > $TOOLS_DIR"
@@ -677,6 +678,30 @@ Supported flags:
 EOF
 
 echo "  > /grog-create skill"
+
+# Skill 6b: /grog-tmux - name the agent's tmux window after its issue
+cat > "$SKILLS_DIR/grog-tmux/SKILL.md" << 'EOF'
+---
+name: grog-tmux
+description: Rename the tmux window (tab) you are working in after its issue. Use when the user asks to rename, name or label the tmux session, window or tab (c1, codex, ...) with a Linear issue, a GitHub issue or a PR.
+allowed-tools: Bash
+argument-hint: <linear-issue-url-or-id | github-issue-or-pr-url>
+---
+
+# GROG tmux - name your window after the issue
+
+Run exactly one command:
+
+```bash
+grog tmux-name <linear-issue-url-or-id | github-issue-or-pr-url>
+```
+
+- It renames only the window of your own pane (`TMUX_PANE`), even when other agents share the tmux session: a Linear issue becomes `MTR-1334`, a GitHub issue or PR `repo#123`.
+- Call `grog`, not `node .../grog/index.js`: in a container `grog` runs on the host, where the tmux server is.
+- In Codex the sandbox blocks the tmux socket: run the command outside the sandbox.
+- Do not call `tmux` yourself and do not write scripts for this.
+EOF
+echo "  > /grog-tmux skill"
 
 # Skill 6: /grog-talk - messaging bridge for remote interaction
 cat > "$SKILLS_DIR/grog-talk/SKILL.md" << 'EOF'

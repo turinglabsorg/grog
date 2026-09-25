@@ -24,6 +24,10 @@ Posts a summary comment to a GitHub issue, GitHub pull request, or Linear issue.
 
 Creates a Linear issue in the configured workspace. The project must declare the workspace in its `.grog` file, and the Linear API key must be configured in `~/.grog/config.json`.
 
+### `/grog-tmux <issue-url-or-id>`
+
+Renames the tmux window you are working in after the issue (`MTR-1334`, `repo#123`), so each agent's tab shows what it is working on. Only your own window changes, even when several agents share a session.
+
 ### `/grog-talk`
 
 Opens a bidirectional Telegram, WhatsApp, or Discord bridge. Messages received from the selected channel are processed as if they were typed in the terminal, and responses are sent back through the same channel.
