@@ -76,6 +76,7 @@ mkdir -p "$SKILLS_DIR/grog-answer"
 mkdir -p "$SKILLS_DIR/grog-create"
 mkdir -p "$SKILLS_DIR/grog-talk"
 mkdir -p "$SKILLS_DIR/grog-tmux"
+mkdir -p "$SKILLS_DIR/grog-up"
 # Remove old /grog skill if it exists
 rm -rf "$SKILLS_DIR/grog" 2>/dev/null || true
 echo "  > $TOOLS_DIR"
@@ -680,6 +681,33 @@ Supported flags:
 EOF
 
 echo "  > /grog-create skill"
+
+# Skill 6c: /grog-up - a public link to a local port
+cat > "$SKILLS_DIR/grog-up/SKILL.md" << 'EOF'
+---
+name: grog-up
+description: Share a local dev server as a public HTTPS link (https://<code>.grooooog.space) that anyone with the link can open. Use when the user wants to see, open, try or show a frontend or local app you are running ("fammi vedere", "dammi un link", "voglio aprirlo dal telefono"), or to share it with someone.
+allowed-tools: Bash
+argument-hint: <port>
+---
+
+# GROG up - a public link to a local port
+
+Start it in the background and give the user the link it prints:
+
+```bash
+grog up <port>
+```
+
+- It prints `https://<code>.grooooog.space -> localhost:<port>`. Run it as a background task and keep it running while the link is needed; stopping it closes the link at once.
+- Only the one port is reachable: the link forwards HTTP (and WebSockets) to `localhost:<port>` and nothing else. The machine accepts no inbound connection.
+- The token that opens links is read from hush by grog; never ask for it, print it or pass it on the command line.
+- Anyone who has the link can open the app. Share links only for apps that are fine to show: not an app connected to real customer data or production credentials, unless the user says so.
+- Close the link (stop the command) when the user is done with it; do not leave links open.
+- A dev server that checks the Host header needs to allow the domain: Vite `server.allowedHosts: ['.grooooog.space']`; Next.js `allowedDevOrigins: ['*.grooooog.space']`.
+- Send the link on Telegram with grog when the user asks for it there.
+EOF
+echo "  > /grog-up skill"
 
 # Skill 6b: /grog-tmux - name the agent's tmux window after its issue
 cat > "$SKILLS_DIR/grog-tmux/SKILL.md" << 'EOF'

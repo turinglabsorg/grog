@@ -1,0 +1,30 @@
+[Unit]
+Description=grog relay: public HTTPS links for grog up
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=grogrelay
+Group=grogrelay
+Environment=GROG_RELAY_DOMAIN=grooooog.space
+ExecStart=/usr/bin/python3 /opt/grog-relay/relay.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=2
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryMax=256M
+ReadOnlyPaths=/etc/grog-relay /opt/grog-relay
+
+[Install]
+WantedBy=multi-user.target

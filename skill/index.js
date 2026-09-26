@@ -6,6 +6,8 @@ import { basename, dirname, join } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
 import { execFileSync, execSync } from "child_process";
+import net from "net";
+import tls from "tls";
 import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
 import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
 
@@ -661,6 +663,160 @@ function handleTmuxName(args) {
     process.exit(1);
   }
   console.log(`tmux window renamed: ${name}`);
+}
+
+// ─────────────────────────────────────────────────────────
+// Public links (grog up)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Where `grog up` connects and with which token. The relay host comes from the
+ * environment or the `tunnel` block of ~/.grog/config.json; the token from
+ * GROG_TUNNEL_TOKEN, else from hush (the secret named by tunnel.tokenName,
+ * GROG_TUNNEL_TOKEN by default), read into this process and never printed.
+ */
+function tunnelSettings() {
+  const tunnel = loadGrogConfig().tunnel || {};
+  const host = process.env.GROG_TUNNEL_HOST || tunnel.host || "up.grooooog.space";
+  return {
+    host,
+    address: process.env.GROG_TUNNEL_ADDRESS || host,
+    port: Number(process.env.GROG_TUNNEL_PORT || tunnel.port || 443),
+    token: process.env.GROG_TUNNEL_TOKEN || tunnel.token || tokenFromHush(tunnel.tokenName || "GROG_TUNNEL_TOKEN"),
+    ca: process.env.GROG_TUNNEL_CA ? readFileSync(process.env.GROG_TUNNEL_CA) : undefined,
+  };
+}
+
+function tokenFromHush(name) {
+  try {
+    return execFileSync("hush", ["run", "--name", name, "--env", name, "--", "printenv", name], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function relayConnection(settings) {
+  return tls.connect({ host: settings.address, port: settings.port, servername: settings.host, ca: settings.ca });
+}
+
+/** The app's side of a stream: IPv4 loopback, then IPv6 (dev servers bind either). */
+function localConnection(port, onReady, onFail) {
+  const attempt = (hosts) => {
+    const socket = net.connect({ port, host: hosts[0] });
+    socket.once("connect", () => onReady(socket));
+    socket.once("error", () => (hosts.length > 1 ? attempt(hosts.slice(1)) : onFail()));
+  };
+  attempt(["127.0.0.1", "::1"]);
+}
+
+// Streams to the local app open at once; past this, visitors wait at the relay.
+const TUNNEL_MAX_STREAMS = 64;
+
+/**
+ * Share a local port as a public HTTPS link until interrupted. The relay pairs
+ * every visitor's connection with a stream this process opens for it, so the
+ * machine needs no inbound access. On a dropped control connection the same
+ * link is reclaimed, within the relay's grace period.
+ * @param {string[]} args
+ */
+async function handleUp(args) {
+  const port = Number(args[0]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error("! error: missing or invalid port");
+    console.log(`  usage: ${COMMAND_HELP.up}`);
+    process.exit(1);
+  }
+  const settings = tunnelSettings();
+  if (!settings.token) {
+    console.error("! error: no tunnel token: store it in hush as GROG_TUNNEL_TOKEN (or set GROG_TUNNEL_TOKEN / tunnel.token)");
+    process.exit(1);
+  }
+  let session = null;
+  let retry = 0;
+  let streams = 0;
+  // Everything the relay says is checked before it is used or printed: a relay
+  // taken over by someone else can then only ask for streams to this one port.
+  const linkPattern = new RegExp(`^https://[a-z0-9]{6,32}\\.${settings.host.replace(/^up\./, "").replace(/\./g, "\\.")}$`);
+  const printable = (text) => String(text).replace(/[^\x20-\x7e]/g, "?").slice(0, 200);
+
+  const openStream = (id) => {
+    if (streams >= TUNNEL_MAX_STREAMS) return;
+    streams += 1;
+    let released = false;
+    const release = () => { if (!released) { released = true; streams -= 1; } };
+    localConnection(
+      port,
+      (local) => {
+        const remote = relayConnection(settings);
+        remote.once("secureConnect", () => {
+          remote.write(`${JSON.stringify({ op: "stream", code: session.code, secret: session.secret, id })}\n`);
+          local.pipe(remote);
+          remote.pipe(local);
+        });
+        const end = () => { local.destroy(); remote.destroy(); release(); };
+        local.on("error", end); remote.on("error", end); local.on("close", end); remote.on("close", end);
+      },
+      () => { release(); console.error(`! nothing answers on localhost:${port} (a visitor got an error page)`); },
+    );
+  };
+
+  const connect = () => {
+    const control = relayConnection(settings);
+    let buffer = "";
+    control.setEncoding("utf8");
+    control.once("secureConnect", () => {
+      control.write(`${JSON.stringify({ op: "open", token: settings.token, label: `port ${port}`, code: session?.code, secret: session?.secret })}\n`);
+    });
+    control.on("data", (chunk) => {
+      buffer += chunk;
+      let newline;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line.startsWith("{")) {
+          let reply;
+          try { reply = JSON.parse(line); } catch { control.destroy(); return; }
+          if (reply.error) {
+            console.error(`! error: ${printable(reply.error)}`);
+            process.exit(1);
+          }
+          if (!linkPattern.test(String(reply.url)) || typeof reply.code !== "string" || typeof reply.secret !== "string") {
+            console.error("! error: the relay sent an unexpected reply; stopping");
+            process.exit(1);
+          }
+          const previous = session?.url;
+          session = reply;
+          retry = 0;
+          if (!previous) {
+            console.log(`> ${reply.url} -> localhost:${port}`);
+            console.log("> anyone with this link can open it; it closes when this command stops (Ctrl-C)");
+          } else if (previous === reply.url) {
+            console.log("> reconnected, same link");
+          } else {
+            console.log(`> reconnected with a NEW link (the old one expired): ${reply.url}`);
+          }
+        } else if (/^N \d{1,9}$/.test(line) && session) {
+          openStream(Number(line.slice(2)));
+        } else if (line === "P") {
+          control.write("P\n");
+        }
+      }
+    });
+    control.on("error", () => {});
+    control.on("close", () => {
+      const wait = Math.min(1000 * 2 ** retry, 10000);
+      retry += 1;
+      if (retry === 1) console.error("! connection to the relay lost, reconnecting...");
+      setTimeout(connect, wait);
+    });
+  };
+
+  connect();
+  await new Promise(() => {});
 }
 
 function parseLinearIssueIdentifier(ref) {
@@ -4654,6 +4810,7 @@ const COMMAND_HELP = {
   start: "grog start <linear-issue-url-or-identifier>",
   done: "grog done <linear-issue-url-or-identifier>",
   cancel: "grog cancel <linear-issue-url-or-identifier>",
+  up: "grog up <port>",
   "tmux-name": "grog tmux-name <linear-issue-url-or-identifier|github-issue-or-pr-url|name>",
   contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID]",
   talk: "grog talk [--whatsapp|--telegram|--discord] [--all]",
@@ -4696,6 +4853,7 @@ function printHelp() {
   console.log("    grog done <issue-url|id>      mark a Linear issue as Done");
   console.log("    grog cancel <issue-url|id>    mark a Linear issue as Canceled");
   console.log("    grog tmux-name <issue|name>   rename the tmux window you are working in (e.g. MTR-1334)");
+  console.log("    grog up <port>                share localhost:<port> as a public https link (Ctrl-C closes it)");
   console.log("    grog contacts list            list saved messaging contacts");
   console.log("    grog talk                     connect a messaging bridge for remote interaction");
   console.log("    grog recv                     wait for the next inbound message");
@@ -4884,6 +5042,10 @@ async function main() {
 
     case "tmux-name":
       handleTmuxName(process.argv.slice(3));
+      break;
+
+    case "up":
+      await handleUp(process.argv.slice(3));
       break;
 
     case "talk": {
