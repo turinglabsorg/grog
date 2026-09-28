@@ -4,7 +4,7 @@ import { config } from "dotenv";
 import { fileURLToPath } from "url";
 import { basename, dirname, join } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync } from "fs";
-import { homedir } from "os";
+import { homedir, hostname } from "os";
 import { execFileSync, execSync } from "child_process";
 import net from "net";
 import tls from "tls";
@@ -703,6 +703,20 @@ function relayConnection(settings) {
   return tls.connect({ host: settings.address, port: settings.port, servername: settings.host, ca: settings.ca });
 }
 
+/** Where this process runs, in words: the machine name, and whether it is a container. */
+function whereAmI() {
+  return `${hostname()}${existsSync("/.dockerenv") ? " (a container)" : " (this machine)"}`;
+}
+
+/** Whether something accepts connections on localhost:port right now. */
+function portAnswers(port) {
+  return new Promise((resolve) => localConnection(port, (socket) => { socket.destroy(); resolve(true); }, () => resolve(false)));
+}
+
+const NOT_LISTENING_HINT =
+  "  If the app runs in a container or on another machine, run grog up there " +
+  "(in a scott session opened before grog:up ran in the container, reopen it).";
+
 /** The app's side of a stream: IPv4 loopback, then IPv6 (dev servers bind either). */
 function localConnection(port, onReady, onFail) {
   const attempt = (hosts) => {
@@ -738,6 +752,7 @@ async function handleUp(args) {
   let session = null;
   let retry = 0;
   let streams = 0;
+  let lastMiss = 0;
   // Everything the relay says is checked before it is used or printed: a relay
   // taken over by someone else can then only ask for streams to this one port.
   const linkPattern = new RegExp(`^https://[a-z0-9]{6,32}\\.${settings.host.replace(/^up\./, "").replace(/\./g, "\\.")}$`);
@@ -760,7 +775,14 @@ async function handleUp(args) {
         const end = () => { local.destroy(); remote.destroy(); release(); };
         local.on("error", end); remote.on("error", end); local.on("close", end); remote.on("close", end);
       },
-      () => { release(); console.error(`! nothing answers on localhost:${port} (a visitor got an error page)`); },
+      () => {
+        release();
+        if (Date.now() - lastMiss > 30000) {
+          lastMiss = Date.now();
+          console.error(`! a visitor got an error page: nothing is listening on localhost:${port} on ${whereAmI()}`);
+          console.error(NOT_LISTENING_HINT);
+        }
+      },
     );
   };
 
@@ -792,8 +814,14 @@ async function handleUp(args) {
           session = reply;
           retry = 0;
           if (!previous) {
-            console.log(`> ${reply.url} -> localhost:${port}`);
+            console.log(`> ${reply.url} -> localhost:${port} on ${whereAmI()}`);
             console.log("> anyone with this link can open it; it closes when this command stops (Ctrl-C)");
+            portAnswers(port).then((answers) => {
+              if (!answers) {
+                console.error(`! nothing is listening on localhost:${port} here yet: visitors get an error page until something does.`);
+                console.error(NOT_LISTENING_HINT);
+              }
+            });
           } else if (previous === reply.url) {
             console.log("> reconnected, same link");
           } else {

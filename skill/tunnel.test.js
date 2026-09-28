@@ -170,6 +170,17 @@ test("a link serves the app, keeps WebSockets, and closes with the command", { s
   assert.match(closed.body, /not open/);
 });
 
+test("says where it runs, and warns when nothing listens on the port", { skip }, async () => {
+  const unused = await freePort();
+  const { child, url, output } = up([String(unused)]);
+  await url;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  child.kill();
+  assert.match(output(), /-> localhost:\d+ on .+\((this machine|a container)\)/);
+  assert.match(output(), /nothing is listening on localhost:\d+ here yet/);
+  assert.match(output(), /run grog up there/);
+});
+
 test("a hostile relay gets nothing but streams to the one port", { skip }, async () => {
   // A relay that lies: a link outside the domain with terminal escapes in it.
   const evil = tls.createServer({ cert: readFileSync(join(scratch, "cert.pem")), key: readFileSync(join(scratch, "key.pem")) }, (socket) => {

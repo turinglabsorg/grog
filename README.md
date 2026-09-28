@@ -9,6 +9,7 @@ It runs on your machine. Credentials stay in `~/.grog/config.json`. The CLI talk
 ```
 grog/
   skill/    CLI (`grog`), skill installer, and tests
+  tunnel/   the relay behind `grog up` (see tunnel/README.md)
 ```
 
 ## Install
@@ -34,6 +35,8 @@ grog jam <jam-url>                Inspect a Jam.dev report
 grog start <issue-url|id>         Move a Linear issue to In Progress
 grog done <issue-url|id>          Move a Linear issue to Done
 grog cancel <issue-url|id>        Move a Linear issue to Canceled
+grog tmux-name <issue-url|id|name> Name your tmux window after the issue (MTR-1334, repo#123)
+grog up <port>                    Share localhost:<port> as a public https link until stopped
 grog contacts ...                 Manage the messaging address book
 ```
 
@@ -55,7 +58,18 @@ grog update PROJ-123 --parent none
 grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md --image /tmp/screenshot.png
 ```
 
-The same entry points exist as skills: `/grog-solve`, `/grog-explore`, `/grog-review`, `/grog-answer`, `/grog-create`, `/grog-talk`.
+The same entry points exist as skills: `/grog-solve`, `/grog-explore`, `/grog-review`, `/grog-answer`, `/grog-create`, `/grog-talk`, `/grog-tmux`, `/grog-up`.
+
+`grog tmux-name` renames only the window of the calling pane (`TMUX_PANE`), so several agents can share a session. Agents run it as soon as they start on an issue. Under Codex's shared app-server daemon the pane is not the caller's, and the command refuses; set `features.daemon_auto_start = false` or run Codex with `--no-daemon`.
+
+## Public links
+
+```bash
+grog up 4000
+# > https://k7f2q9xw3m.grooooog.space -> localhost:4000 on my-mac (this machine)
+```
+
+Anyone with the link can open the app on port 4000, from any device, until the command stops. It says where it runs and warns at once when nothing listens on the port. The link goes through our relay (`tunnel/`): the machine only dials out and accepts no inbound connection, only that one port is reachable, and only holders of the tunnel token (kept in hush as `GROG_TUNNEL_TOKEN`, never printed) can open links. Share links only for apps that are fine to show. Details, security model and deployment: [tunnel/README.md](tunnel/README.md).
 
 ## Messaging
 
@@ -116,6 +130,8 @@ Telegram attachments land in `/tmp/grog-telegram-files`. Discord attachments lan
 node --check skill/index.js
 npm test --prefix skill
 ```
+
+The tests include the whole `grog up` path against a local relay (`skill/tunnel.test.js`), which needs `python3` and `openssl`.
 
 ## License
 
