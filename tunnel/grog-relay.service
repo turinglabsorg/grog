@@ -25,6 +25,9 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
 MemoryMax=256M
 ReadOnlyPaths=/etc/grog-relay /opt/grog-relay
+StateDirectory=grog-relay
+StateDirectoryMode=0700
+Environment=GROG_RELAY_STATE=/var/lib/grog-relay/state.json
 
 [Install]
 WantedBy=multi-user.target

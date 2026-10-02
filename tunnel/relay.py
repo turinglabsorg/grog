@@ -11,7 +11,16 @@ and the bytes are piped both ways, so HTTP, keep-alive and WebSockets all pass.
 - The code in a link is random: whoever has the link can open it, nobody can
   guess it. A link lives while its client is connected, plus a short grace
   period for reconnects, then it is gone.
-- TLS uses a wildcard certificate for the domain, reloaded on SIGHUP.
+- A client can also ask for a fixed host: a name under the domain, or a site
+  domain of ours (one with a certificate in the domains directory, e.g.
+  alienwatch.buzz and its subdomains). Fixed hosts are guessable, so they are
+  for things meant to be seen. A new claim with the token takes the host over,
+  which is how a restarted `grog serve` gets its sites back.
+- TLS uses a wildcard certificate for the domain, and each site domain its own,
+  picked by SNI; all are reloaded on SIGHUP.
+- Open links survive a restart of the relay: their hosts and secrets are kept
+  in a state file (readable by the relay's user only), so clients reconnect to
+  the same address within the grace period.
 - Nothing about requests is logged beyond counts.
 
 Standard library only (Python 3.10+).
@@ -23,6 +32,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import signal
 import ssl
@@ -32,6 +42,8 @@ DOMAIN = os.environ.get("GROG_RELAY_DOMAIN", "grooooog.space").lower()
 CONTROL_HOST = "up." + DOMAIN
 CERT = os.environ.get("GROG_RELAY_CERT", "/etc/grog-relay/fullchain.pem")
 KEY = os.environ.get("GROG_RELAY_KEY", "/etc/grog-relay/privkey.pem")
+DOMAINS_DIR = os.environ.get("GROG_RELAY_DOMAINS_DIR", "/etc/grog-relay/domains")
+STATE = os.environ.get("GROG_RELAY_STATE", "/var/lib/grog-relay/state.json")
 TOKEN_SHA256 = os.environ.get("GROG_RELAY_TOKEN_SHA256", "/etc/grog-relay/token.sha256")
 HTTPS_PORT = int(os.environ.get("GROG_RELAY_HTTPS_PORT", "443"))
 HTTP_PORT = int(os.environ.get("GROG_RELAY_HTTP_PORT", "80"))
@@ -44,6 +56,8 @@ STREAM_WAIT = 15
 GRACE = 90
 PING_EVERY = 20
 CODE_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
+RESERVED = {"up", "www"}
+HOSTNAME = re.compile(r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 
 log = logging.getLogger("grog-relay")
 
@@ -77,7 +91,66 @@ class Tunnel:
             self.waiting.pop(stream_id, None)
 
 
-tunnels = {}
+tunnels = {}  # host -> Tunnel
+dirty = False  # tunnels changed since the state file was written
+
+
+def mark_dirty():
+    global dirty
+    dirty = True
+
+
+def save_state():
+    """Write the open links (host, secret, label) for the next start; owner-only."""
+    global dirty
+    data = {host: {"secret": t.secret, "label": t.label} for host, t in tunnels.items()}
+    try:
+        temporary = STATE + ".tmp"
+        with open(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as handle:
+            json.dump(data, handle)
+        os.replace(temporary, STATE)
+        dirty = False
+    except OSError as error:
+        log.warning("state not saved: %s", error)
+
+
+def load_state():
+    """Bring back the links of the last run, waiting for their clients."""
+    try:
+        with open(STATE, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return
+    now = time.monotonic()
+    for host, entry in (data or {}).items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("secret"), str):
+            continue
+        if not (host.endswith("." + DOMAIN) or site_of(host)):
+            continue
+        tunnel = Tunnel(host, entry["secret"], str(entry.get("label") or "")[:80])
+        tunnel.gone_since = now
+        tunnels[host] = tunnel
+    if tunnels:
+        log.info("waiting for %d link(s) of the last run to reconnect", len(tunnels))
+site_contexts = {}  # site domain -> SSLContext
+
+
+def site_of(host):
+    """The site domain whose certificate covers host (apex or one label below), if any."""
+    for domain in site_contexts:
+        if host == domain or (host.endswith("." + domain) and "." not in host[: -len(domain) - 1]):
+            return domain
+    return None
+
+
+def claimable(host):
+    """Whether a client may ask for this fixed host."""
+    if not HOSTNAME.match(host):
+        return False
+    if host.endswith("." + DOMAIN):
+        label = host[: -len(DOMAIN) - 1]
+        return "." not in label and label not in RESERVED
+    return site_of(host) is not None
 
 
 def token_ok(token):
@@ -90,11 +163,11 @@ def token_ok(token):
     return bool(expected) and hmac.compare_digest(given, expected)
 
 
-def new_code():
+def new_host():
     while True:
-        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(10))
-        if code not in tunnels:
-            return code
+        host = "".join(secrets.choice(CODE_ALPHABET) for _ in range(10)) + "." + DOMAIN
+        if host not in tunnels:
+            return host
 
 
 def http_response(status, body, extra=""):
@@ -188,18 +261,45 @@ async def serve_client(first, reader, writer):
         if not token_ok(request.get("token")):
             writer.write(json.dumps({"error": "invalid tunnel token"}).encode() + b"\n")
             return await close(writer)
+        label = str(request.get("label") or "")[:80]
+        wanted = str(request.get("domain") or "").strip().lower().rstrip(".")
         tunnel = tunnels.get(str(request.get("code") or ""))
-        if tunnel is None or not hmac.compare_digest(tunnel.secret, str(request.get("secret") or "")):
+        if wanted:
+            if not claimable(wanted):
+                writer.write(json.dumps({"error": f"this relay does not serve {wanted[:100]}"}).encode() + b"\n")
+                return await close(writer)
+            tunnel = tunnels.get(wanted)
+            if tunnel is None:
+                if len(tunnels) >= MAX_TUNNELS:
+                    writer.write(json.dumps({"error": "too many open links"}).encode() + b"\n")
+                    return await close(writer)
+                tunnel = Tunnel(wanted, secrets.token_hex(16), label)
+                tunnels[wanted] = tunnel
+                mark_dirty()
+                log.info("tunnel %s opened (%d open)", wanted, len(tunnels))
+            else:
+                if tunnel.control is not None:
+                    try:
+                        tunnel.control.write(b"T\n")
+                        await tunnel.control.drain()
+                    except Exception:
+                        pass
+                    await close(tunnel.control)
+                tunnel.secret = secrets.token_hex(16)
+                mark_dirty()
+                log.info("tunnel %s taken over", wanted)
+        elif tunnel is None or not hmac.compare_digest(tunnel.secret, str(request.get("secret") or "")):
             if len(tunnels) >= MAX_TUNNELS:
                 writer.write(json.dumps({"error": "too many open links"}).encode() + b"\n")
                 return await close(writer)
-            tunnel = Tunnel(new_code(), secrets.token_hex(16), str(request.get("label") or "")[:80])
+            tunnel = Tunnel(new_host(), secrets.token_hex(16), label)
             tunnels[tunnel.code] = tunnel
+            mark_dirty()
             log.info("tunnel %s opened (%d open)", tunnel.code, len(tunnels))
         elif tunnel.control is not None:
             await close(tunnel.control)
         writer.write(json.dumps({
-            "url": f"https://{tunnel.code}.{DOMAIN}",
+            "url": f"https://{tunnel.code}",
             "code": tunnel.code,
             "secret": tunnel.secret,
         }).encode() + b"\n")
@@ -234,12 +334,14 @@ async def serve_https(reader, writer):
     except Exception:
         return await close(writer)
     host = host_of(head)
-    code = host[: -len("." + DOMAIN)] if host.endswith("." + DOMAIN) else ""
-    tunnel = tunnels.get(code)
+    tunnel = tunnels.get(host)
     if tunnel is None or tunnel.control is None:
-        title = "grog" if host in (DOMAIN, CONTROL_HOST) else "This link is not open"
-        text = "Public links to work in progress." if title == "grog" else \
-            "Nothing is being shared at this address right now. Ask for a new link."
+        if host in (DOMAIN, CONTROL_HOST):
+            title, text = "grog", "Public links to work in progress."
+        elif site_of(host):
+            title, text = "This site is offline", "It is not being served right now. Please try again later."
+        else:
+            title, text = "This link is not open", "Nothing is being shared at this address right now. Ask for a new link."
         writer.write(http_response("404 Not Found", page(title, text)))
         return await close(writer)
     stream = await tunnel.stream()
@@ -265,7 +367,7 @@ async def serve_http(reader, writer):
         return await close(writer)
     path = head.split(b" ", 2)[1].decode("latin-1") if head.count(b" ") >= 2 else "/"
     host = host_of(head) or DOMAIN
-    if not (host == DOMAIN or host.endswith("." + DOMAIN)):
+    if not (host == DOMAIN or host.endswith("." + DOMAIN) or site_of(host)):
         host = DOMAIN
     if not path.startswith("/"):
         path = "/"
@@ -275,34 +377,83 @@ async def serve_http(reader, writer):
 
 async def sweep():
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)
+        if dirty:
+            save_state()
         now = time.monotonic()
         for code, tunnel in list(tunnels.items()):
             if tunnel.control is None and tunnel.gone_since and now - tunnel.gone_since > GRACE:
                 del tunnels[code]
+                mark_dirty()
                 log.info("tunnel %s closed after serving %d connections (%d open)", code, tunnel.served, len(tunnels))
 
 
-def tls_context():
+def tls_context(cert, key):
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.set_alpn_protocols(["http/1.1"])
-    context.load_cert_chain(CERT, KEY)
+    context.load_cert_chain(cert, key)
     return context
+
+
+def load_sites():
+    """One context per site domain: DOMAINS_DIR/<domain>/{fullchain,privkey}.pem."""
+    contexts = {}
+    try:
+        names = sorted(os.listdir(DOMAINS_DIR))
+    except OSError:
+        names = []
+    for name in names:
+        folder = os.path.join(DOMAINS_DIR, name)
+        if not HOSTNAME.match(name):
+            continue
+        try:
+            contexts[name] = tls_context(os.path.join(folder, "fullchain.pem"), os.path.join(folder, "privkey.pem"))
+        except (OSError, ssl.SSLError) as error:
+            log.warning("site %s skipped: %s", name, error)
+    return contexts
+
+
+def pick_context(ssl_object, server_name, _context):
+    domain = site_of((server_name or "").lower())
+    if domain:
+        ssl_object.context = site_contexts[domain]
 
 
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    context = tls_context()
+    global site_contexts
+    context = tls_context(CERT, KEY)
+    context.sni_callback = pick_context
+    site_contexts = load_sites()
+    load_state()
+
+    def reload():
+        global site_contexts
+        context.load_cert_chain(CERT, KEY)
+        site_contexts = load_sites()
+        log.info("certificates reloaded; sites: %s", ", ".join(site_contexts) or "none")
+
     loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGHUP, lambda: (context.load_cert_chain(CERT, KEY), log.info("certificate reloaded")))
+    loop.add_signal_handler(signal.SIGHUP, reload)
+    stop = asyncio.Event()
+    loop.add_signal_handler(signal.SIGTERM, stop.set)
+    loop.add_signal_handler(signal.SIGINT, stop.set)
     https = await asyncio.start_server(serve_https, port=HTTPS_PORT, ssl=context, ssl_handshake_timeout=15)
     http = await asyncio.start_server(serve_http, port=HTTP_PORT)
-    log.info("grog relay for %s on :%d and :%d", DOMAIN, HTTPS_PORT, HTTP_PORT)
-    asyncio.ensure_future(sweep())
-    async with https, http:
-        await asyncio.gather(https.serve_forever(), http.serve_forever())
-
+    log.info("grog relay for %s on :%d and :%d; sites: %s", DOMAIN, HTTPS_PORT, HTTP_PORT, ", ".join(site_contexts) or "none")
+    sweeper = asyncio.ensure_future(sweep())
+    await stop.wait()
+    # Save first, then close without waiting: open tunnels never end on their
+    # own, and Server.wait_closed() would wait for them.
+    sweeper.cancel()
+    save_state()
+    https.close()
+    http.close()
+    for tunnel in tunnels.values():
+        if tunnel.control is not None:
+            tunnel.control.transport.abort()
+    log.info("stopped; %d link(s) kept for the next start", len(tunnels))
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -686,12 +686,14 @@ echo "  > /grog-create skill"
 cat > "$SKILLS_DIR/grog-up/SKILL.md" << 'EOF'
 ---
 name: grog-up
-description: Share a local dev server as a public HTTPS link (https://<code>.grooooog.space) that anyone with the link can open. Use when the user wants to see, open, try or show a frontend or local app you are running ("fammi vedere", "dammi un link", "voglio aprirlo dal telefono"), or to share it with someone.
-allowed-tools: Bash
-argument-hint: <port>
+description: Share a local dev server as a public HTTPS link, or put a site on one of our own domains (like alienwatch.buzz) and keep it online from this machine. Use when the user wants to see, open, try or show a frontend or app you run ("fammi vedere", "dammi un link", "voglio aprirlo dal telefono"), to share it with someone, or to serve something on one of our domains.
+allowed-tools: Bash, Read, Edit
+argument-hint: <port> | <our-domain>
 ---
 
-# GROG up - a public link to a local port
+# GROG up - public links and our own domains
+
+## A temporary link: `grog up <port>`
 
 Start it in the background and give the user the link it prints:
 
@@ -699,13 +701,33 @@ Start it in the background and give the user the link it prints:
 grog up <port>
 ```
 
-- It prints `https://<code>.grooooog.space -> localhost:<port>`. Run it as a background task and keep it running while the link is needed; stopping it closes the link at once.
+- It prints `https://<code>.grooooog.space -> localhost:<port> on <machine>`. Keep it running while the link is needed; stopping it closes the link at once.
+- It says where it runs: "(a container)" or "(this machine)". If it warns that nothing is listening, the app is somewhere else (another container or machine): run grog up where the app runs; do not change the app.
 - Only the one port is reachable: the link forwards HTTP (and WebSockets) to `localhost:<port>` and nothing else. The machine accepts no inbound connection.
 - The token that opens links is read from hush by grog; never ask for it, print it or pass it on the command line.
 - Anyone who has the link can open the app. Share links only for apps that are fine to show: not an app connected to real customer data or production credentials, unless the user says so.
 - Close the link (stop the command) when the user is done with it; do not leave links open.
 - A dev server that checks the Host header needs to allow the domain: Vite `server.allowedHosts: ['.grooooog.space']`; Next.js `allowedDevOrigins: ['*.grooooog.space']`.
 - Send the link on Telegram with grog when the user asks for it there.
+
+## Our domains: always persistent, through `~/.grog/sites.json`
+
+A site on one of our domains (the list is `~/.config/grog-relay/sites`, e.g. `alienwatch.buzz` and its subdomains) is **never** served with a one-off `grog up`. Add its host to `~/.grog/sites.json` on the Mac Pro: the always-on `grog serve` (launchd agent `space.grooooog.serve`) puts it online within seconds and keeps it there across crashes, reboots and relay restarts.
+
+```json
+{
+  "alienwatch.buzz":     { "dir": "~/Sites/alienwatch.buzz" },
+  "www.alienwatch.buzz": { "redirect": "https://alienwatch.buzz" },
+  "app.alienwatch.buzz": { "run": "npm start", "cwd": "~/GIT/app", "port": 4100 }
+}
+```
+
+- `dir`: static files (grog serves them; hidden files like `.env` and anything outside the folder are never served). `port`: an app already listening. `run` + `cwd` + `port`: an app grog starts with `PORT` set and restarts when it exits. `redirect`: a 301 keeping the path.
+- The file holds every site: edit it, keep it valid JSON, change only the host you were asked about.
+- Verify: `~/Library/Logs/grog-serve.log` shows `[host] > https://host -> localhost:...`; then open the address.
+- In a scott container, an app it serves must listen where `grog serve` runs (the Mac Pro host): use `dir` for static builds, or `run` so the host starts the app.
+- A domain that is not in the list needs the user first: its nameservers set to DigitalOcean at the registrar. Then follow "Adding a site domain" in grog's `tunnel/README.md` (DNS records, certificate with `renew.sh`).
+- `grog up <port> --domain demo.grooooog.space` gives a quick fixed name under grooooog.space; anything that must stay up goes in sites.json too.
 EOF
 echo "  > /grog-up skill"
 

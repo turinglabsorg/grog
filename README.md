@@ -37,6 +37,8 @@ grog done <issue-url|id>          Move a Linear issue to Done
 grog cancel <issue-url|id>        Move a Linear issue to Canceled
 grog tmux-name <issue-url|id|name> Name your tmux window after the issue (MTR-1334, repo#123)
 grog up <port>                    Share localhost:<port> as a public https link until stopped
+grog up <port> --domain <host>    The same on a fixed host (demo.grooooog.space, alienwatch.buzz)
+grog serve                        Keep the sites in ~/.grog/sites.json online (site domains)
 grog contacts ...                 Manage the messaging address book
 ```
 
@@ -69,7 +71,9 @@ grog up 4000
 # > https://k7f2q9xw3m.grooooog.space -> localhost:4000 on my-mac (this machine)
 ```
 
-Anyone with the link can open the app on port 4000, from any device, until the command stops. It says where it runs and warns at once when nothing listens on the port. The link goes through our relay (`tunnel/`): the machine only dials out and accepts no inbound connection, only that one port is reachable, and only holders of the tunnel token (kept in hush as `GROG_TUNNEL_TOKEN`, never printed) can open links. Share links only for apps that are fine to show. Details, security model and deployment: [tunnel/README.md](tunnel/README.md).
+Anyone with the link can open the app on port 4000, from any device, until the command stops. It says where it runs and warns at once when nothing listens on the port. The link goes through our relay (`tunnel/`): the machine only dials out and accepts no inbound connection, only that one port is reachable, and only holders of the tunnel token (kept in hush as `GROG_TUNNEL_TOKEN`, never printed) can open links. Share links only for apps that are fine to show.
+
+Our own domains (like `alienwatch.buzz`) are served persistently, never by a one-off `grog up`: list their hosts in `~/.grog/sites.json` with what answers there (`dir` for static files, `port`, `run` to start an app, `redirect`) and `grog serve` keeps them online, as a launchd agent on the Mac Pro. Details, security model, adding a domain and deployment: [tunnel/README.md](tunnel/README.md).
 
 ## Messaging
 

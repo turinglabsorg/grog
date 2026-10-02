@@ -13,7 +13,43 @@ visitor ──https──▶ relay (droplet) ◀──tls── grog up ──�
 2. A visitor opens the link. The relay asks the client, over the control connection, for a stream.
 3. The client opens a new connection to the relay for it and one to `localhost:<port>`, and pipes the two. HTTP, keep-alive and WebSockets pass untouched.
 
-A link lives while `grog up` runs. On a dropped connection the client reclaims the same link within 90 seconds; after that it is gone.
+A link lives while `grog up` runs. On a dropped connection the client reclaims the same link within 90 seconds; after that it is gone. The relay keeps open links across its own restarts (`/var/lib/grog-relay/state.json`, readable by its user only), so a restart or a security update does not change any address.
+
+## Fixed addresses and site domains
+
+`grog up <port> --domain <host>` asks for a fixed host instead of a random code:
+
+- a name under the relay's domain, one label deep, like `demo.grooooog.space` (`up` and `www` are reserved);
+- or a **site domain** of ours, apex or one label below, like `alienwatch.buzz` or `www.alienwatch.buzz`. The relay serves a site domain once its certificate is in `/etc/grog-relay/domains/<domain>/` and picks it by SNI.
+
+A new claim with the token takes a fixed host over and tells the previous client, which stops; that is how a restarted machine gets its sites back without waiting. Fixed hosts are guessable: they are for things meant to be seen.
+
+## Persistent sites: `grog serve`
+
+A site domain is never served by a one-off `grog up`. `grog serve` keeps every site in `~/.grog/sites.json` online and follows changes to the file within seconds:
+
+```json
+{
+  "alienwatch.buzz":     { "dir": "~/Sites/alienwatch.buzz" },
+  "www.alienwatch.buzz": { "redirect": "https://alienwatch.buzz" },
+  "app.alienwatch.buzz": { "port": 4000 },
+  "api.alienwatch.buzz": { "run": "npm start", "cwd": "~/GIT/api", "port": 4100 }
+}
+```
+
+- `dir`: static files, served by grog itself: nothing outside the folder (symlinks included), no hidden files or folders (`.env`, `.git`), GET and HEAD only, no listings.
+- `redirect`: a 301 to that address, keeping the path.
+- `port`: an app already listening on that port.
+- `run` + `port`: the command that starts the app (in `cwd`, with `PORT` set), restarted when it exits.
+
+On the Mac Pro `grog serve` runs as the launchd agent `space.grooooog.serve` (`KeepAlive`, log `~/Library/Logs/grog-serve.log`), so the sites come back after a crash or a reboot once the user session is up.
+
+### Adding a site domain
+
+1. At the registrar, set the domain's nameservers to `ns1.digitalocean.com`, `ns2.digitalocean.com`, `ns3.digitalocean.com`.
+2. In DigitalOcean DNS (the account with the relay), add the domain with `A @`, `A www` and `A *` pointing at the relay.
+3. Add the domain to `~/.config/grog-relay/sites` and run `renew.sh`: it gets the apex + wildcard certificate and installs it on the relay, which picks it up at once. The weekly run keeps it renewed.
+4. Add its hosts to `~/.grog/sites.json`.
 
 ## Security
 
@@ -35,7 +71,7 @@ cp relay.py /opt/grog-relay/ && cp grog-relay.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now grog-relay
 ```
 
-`renew.sh` gets or renews the wildcard certificate with [lego](https://go-acme.github.io/lego/) and DigitalOcean DNS, from the machine that keeps the DNS token in hush, and installs it on the relay when it changed; run it weekly (a launchd or cron job). Settings: `GROG_RELAY_DOMAIN`, `GROG_RELAY_SSH`, `GROG_RELAY_DNS_TOKEN_NAME`, `GROG_RELAY_LEGO_DIR`.
+`renew.sh` gets or renews the certificates with [lego](https://go-acme.github.io/lego/) and DigitalOcean DNS, from the machine that keeps the DNS token in hush: the relay's wildcard, and apex + wildcard of every site domain in `~/.config/grog-relay/sites`. It installs what changed on the relay and reloads it; run it weekly (a launchd or cron job). Settings: `GROG_RELAY_DOMAIN`, `GROG_RELAY_SSH`, `GROG_RELAY_DNS_TOKEN_NAME`, `GROG_RELAY_LEGO_DIR`, `GROG_RELAY_SITES_FILE`.
 
 ## Client settings
 
@@ -45,4 +81,4 @@ Dev servers that check the Host header need to allow the domain: Vite `server.al
 
 ## Test
 
-`skill/tunnel.test.js` runs the relay with a throwaway CA and checks the whole path: a page, parallel requests, a WebSocket, a wrong token, an unknown link, closing, and a hostile relay.
+`skill/tunnel.test.js` runs the relay with a throwaway CA and checks the whole path: a page, parallel requests, a WebSocket, a wrong token, an unknown link, closing, a hostile relay, a site domain with its own certificate, fixed and refused names, a takeover, `grog serve` (static files, refused paths, redirects, removing a site) and a relay restart that keeps the link.

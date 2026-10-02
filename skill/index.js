@@ -2,10 +2,11 @@
 
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
-import { basename, dirname, join } from "path";
-import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync } from "fs";
+import { basename, dirname, join, resolve, sep } from "path";
+import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync, realpathSync, createReadStream, watchFile } from "fs";
 import { homedir, hostname } from "os";
-import { execFileSync, execSync } from "child_process";
+import { execFileSync, execSync, spawn } from "child_process";
+import http from "http";
 import net from "net";
 import tls from "tls";
 import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
@@ -731,31 +732,30 @@ function localConnection(port, onReady, onFail) {
 const TUNNEL_MAX_STREAMS = 64;
 
 /**
- * Share a local port as a public HTTPS link until interrupted. The relay pairs
- * every visitor's connection with a stream this process opens for it, so the
- * machine needs no inbound access. On a dropped control connection the same
- * link is reclaimed, within the relay's grace period.
- * @param {string[]} args
+ * Keep a public link open to localhost:port, reconnecting until stopped. With
+ * `domain` the link is that fixed host (a name under the relay's domain, or a
+ * site domain of ours) and a claim takes it over; without, a random code. The
+ * relay pairs every visitor's connection with a stream this process opens for
+ * it, so the machine needs no inbound access. Returns { stop }.
  */
-async function handleUp(args) {
-  const port = Number(args[0]);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    console.error("! error: missing or invalid port");
-    console.log(`  usage: ${COMMAND_HELP.up}`);
-    process.exit(1);
-  }
-  const settings = tunnelSettings();
-  if (!settings.token) {
-    console.error("! error: no tunnel token: store it in hush as GROG_TUNNEL_TOKEN (or set GROG_TUNNEL_TOKEN / tunnel.token)");
-    process.exit(1);
-  }
+function openTunnel({ port, domain = "", settings, say = console.log, warn = console.error, onFatal }) {
   let session = null;
   let retry = 0;
   let streams = 0;
   let lastMiss = 0;
+  let stopped = false;
+  let control = null;
+  const fatal = (message) => {
+    stopped = true;
+    control?.destroy();
+    (onFatal || ((m) => { console.error(m); process.exit(1); }))(message);
+  };
   // Everything the relay says is checked before it is used or printed: a relay
   // taken over by someone else can then only ask for streams to this one port.
-  const linkPattern = new RegExp(`^https://[a-z0-9]{6,32}\\.${settings.host.replace(/^up\./, "").replace(/\./g, "\\.")}$`);
+  const base = settings.host.replace(/^up\./, "").replace(/\./g, "\\.");
+  const linkPattern = domain
+    ? new RegExp(`^https://${domain.replace(/\./g, "\\.")}$`)
+    : new RegExp(`^https://[a-z0-9]{6,32}\\.${base}$`);
   const printable = (text) => String(text).replace(/[^\x20-\x7e]/g, "?").slice(0, 200);
 
   const openStream = (id) => {
@@ -779,19 +779,20 @@ async function handleUp(args) {
         release();
         if (Date.now() - lastMiss > 30000) {
           lastMiss = Date.now();
-          console.error(`! a visitor got an error page: nothing is listening on localhost:${port} on ${whereAmI()}`);
-          console.error(NOT_LISTENING_HINT);
+          warn(`! a visitor got an error page: nothing is listening on localhost:${port} on ${whereAmI()}`);
+          warn(NOT_LISTENING_HINT);
         }
       },
     );
   };
 
   const connect = () => {
-    const control = relayConnection(settings);
+    if (stopped) return;
+    control = relayConnection(settings);
     let buffer = "";
     control.setEncoding("utf8");
     control.once("secureConnect", () => {
-      control.write(`${JSON.stringify({ op: "open", token: settings.token, label: `port ${port}`, code: session?.code, secret: session?.secret })}\n`);
+      control.write(`${JSON.stringify({ op: "open", token: settings.token, label: `port ${port}`, domain: domain || undefined, code: session?.code, secret: session?.secret })}\n`);
     });
     control.on("data", (chunk) => {
       buffer += chunk;
@@ -802,48 +803,243 @@ async function handleUp(args) {
         if (line.startsWith("{")) {
           let reply;
           try { reply = JSON.parse(line); } catch { control.destroy(); return; }
-          if (reply.error) {
-            console.error(`! error: ${printable(reply.error)}`);
-            process.exit(1);
-          }
+          if (reply.error) return fatal(`! error: ${printable(reply.error)}`);
           if (!linkPattern.test(String(reply.url)) || typeof reply.code !== "string" || typeof reply.secret !== "string") {
-            console.error("! error: the relay sent an unexpected reply; stopping");
-            process.exit(1);
+            return fatal("! error: the relay sent an unexpected reply; stopping");
           }
           const previous = session?.url;
           session = reply;
           retry = 0;
           if (!previous) {
-            console.log(`> ${reply.url} -> localhost:${port} on ${whereAmI()}`);
-            console.log("> anyone with this link can open it; it closes when this command stops (Ctrl-C)");
+            say(`> ${reply.url} -> localhost:${port} on ${whereAmI()}`);
+            say(domain
+              ? "> this address is public and fixed; it is served while this runs"
+              : "> anyone with this link can open it; it closes when this command stops (Ctrl-C)");
             portAnswers(port).then((answers) => {
               if (!answers) {
-                console.error(`! nothing is listening on localhost:${port} here yet: visitors get an error page until something does.`);
-                console.error(NOT_LISTENING_HINT);
+                warn(`! nothing is listening on localhost:${port} here yet: visitors get an error page until something does.`);
+                warn(NOT_LISTENING_HINT);
               }
             });
           } else if (previous === reply.url) {
-            console.log("> reconnected, same link");
+            say("> reconnected, same link");
           } else {
-            console.log(`> reconnected with a NEW link (the old one expired): ${reply.url}`);
+            say(`> reconnected with a NEW link (the old one expired): ${reply.url}`);
           }
         } else if (/^N \d{1,9}$/.test(line) && session) {
           openStream(Number(line.slice(2)));
         } else if (line === "P") {
           control.write("P\n");
+        } else if (line === "T") {
+          return fatal(`! ${domain} was taken over by another grog up or grog serve; stopping here`);
         }
       }
     });
     control.on("error", () => {});
     control.on("close", () => {
+      if (stopped) return;
       const wait = Math.min(1000 * 2 ** retry, 10000);
       retry += 1;
-      if (retry === 1) console.error("! connection to the relay lost, reconnecting...");
+      if (retry === 1) warn("! connection to the relay lost, reconnecting...");
       setTimeout(connect, wait);
     });
   };
 
   connect();
+  return { stop() { stopped = true; control?.destroy(); } };
+}
+
+const HOST_PATTERN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+function requireTunnelToken(settings) {
+  if (!settings.token) {
+    console.error("! error: no tunnel token: store it in hush as GROG_TUNNEL_TOKEN (or set GROG_TUNNEL_TOKEN / tunnel.token)");
+    process.exit(1);
+  }
+}
+
+/**
+ * grog up <port> [--domain <host>]: share a local port until interrupted.
+ * @param {string[]} args
+ */
+async function handleUp(args) {
+  const rest = [...args];
+  let domain = "";
+  const flag = rest.indexOf("--domain");
+  if (flag >= 0) {
+    domain = String(rest[flag + 1] || "").toLowerCase().replace(/\.$/, "");
+    rest.splice(flag, 2);
+    if (!HOST_PATTERN.test(domain)) {
+      console.error("! error: --domain needs a host name, like alienwatch.buzz or demo.grooooog.space");
+      process.exit(1);
+    }
+  }
+  const port = Number(rest[0]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error("! error: missing or invalid port");
+    console.log(`  usage: ${COMMAND_HELP.up}`);
+    process.exit(1);
+  }
+  const settings = tunnelSettings();
+  requireTunnelToken(settings);
+  openTunnel({ port, domain, settings });
+  await new Promise(() => {});
+}
+
+// ─────────────────────────────────────────────────────────
+// Sites (grog serve)
+// ─────────────────────────────────────────────────────────
+
+const SITES_PATH = process.env.GROG_SITES || join(homedir(), ".grog", "sites.json");
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".json": "application/json",
+  ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon", ".avif": "image/avif",
+  ".woff": "font/woff", ".woff2": "font/woff2", ".pdf": "application/pdf", ".xml": "application/xml",
+  ".webmanifest": "application/manifest+json", ".mp4": "video/mp4", ".webm": "video/webm",
+};
+
+/**
+ * Serve the files of one folder, and nothing outside it: no path that leaves
+ * the folder (symlinks included), no hidden files or folders (.env, .git),
+ * GET and HEAD only, no directory listings.
+ */
+function staticHandler(dir) {
+  const root = realpathSync(resolve(String(dir).replace(/^~(?=\/|$)/, homedir())));
+  const notFound = (res) => { res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }); res.end("Not found"); };
+  return (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(405, { Allow: "GET, HEAD" }); return res.end(); }
+    let path;
+    try { path = decodeURIComponent(new URL(req.url, "http://site").pathname); } catch { return notFound(res); }
+    if (path.includes("\0") || path.split("/").some((part) => part.startsWith("."))) return notFound(res);
+    try {
+      let file = realpathSync(join(root, path));
+      if (statSync(file).isDirectory()) file = realpathSync(join(file, "index.html"));
+      if (file !== root && !file.startsWith(root + sep)) return notFound(res);
+      const stat = statSync(file);
+      if (!stat.isFile()) return notFound(res);
+      const ext = file.slice(file.lastIndexOf(".")).toLowerCase();
+      res.writeHead(200, {
+        "Content-Type": MIME[ext] || "application/octet-stream",
+        "Content-Length": stat.size,
+        "X-Content-Type-Options": "nosniff",
+      });
+      if (req.method === "HEAD") return res.end();
+      createReadStream(file).on("error", () => res.destroy()).pipe(res);
+    } catch {
+      notFound(res);
+    }
+  };
+}
+
+function redirectHandler(target) {
+  const base = String(target).replace(/\/+$/, "");
+  return (req, res) => { res.writeHead(301, { Location: base + req.url }); res.end(); };
+}
+
+function listenLocal(handler) {
+  return new Promise((done, fail) => {
+    const server = http.createServer(handler);
+    server.once("error", fail);
+    server.listen(0, "127.0.0.1", () => done(server));
+  });
+}
+
+/** Start an app with `run` in `cwd` (PORT set), restarting it when it exits. */
+function keepRunning(spec, say, warn) {
+  let child = null;
+  let stopped = false;
+  let restarts = 0;
+  const start = () => {
+    if (stopped) return;
+    child = spawn(spec.run, { shell: true, cwd: spec.cwd ? String(spec.cwd).replace(/^~(?=\/|$)/, homedir()) : undefined,
+      env: { ...process.env, PORT: String(spec.port) }, stdio: ["ignore", "inherit", "inherit"], detached: true });
+    say(`> started: ${spec.run}`);
+    child.on("exit", (code) => {
+      if (stopped) return;
+      const wait = Math.min(1000 * 2 ** restarts, 30000);
+      restarts += 1;
+      warn(`! the app exited (${code}); starting it again in ${wait / 1000}s`);
+      setTimeout(start, wait);
+    });
+  };
+  start();
+  return () => { stopped = true; if (child?.pid) { try { process.kill(-child.pid); } catch {} } };
+}
+
+async function startSite(host, spec, settings) {
+  const say = (message) => console.log(`[${host}] ${message}`);
+  const warn = (message) => console.error(`[${host}] ${message}`);
+  const stops = [];
+  let port;
+  try {
+    if (spec.redirect) {
+      const server = await listenLocal(redirectHandler(spec.redirect));
+      port = server.address().port;
+      stops.push(() => server.close());
+    } else if (spec.dir) {
+      const server = await listenLocal(staticHandler(spec.dir));
+      port = server.address().port;
+      stops.push(() => server.close());
+    } else if (Number.isInteger(Number(spec.port)) && Number(spec.port) > 0) {
+      port = Number(spec.port);
+      if (spec.run) stops.push(keepRunning(spec, say, warn));
+    } else {
+      warn("! needs one of: port, dir, redirect");
+      return () => {};
+    }
+  } catch (error) {
+    warn(`! cannot start: ${error.message}`);
+    return () => stops.forEach((stop) => stop());
+  }
+  const tunnel = openTunnel({ port, domain: host, settings, say, warn, onFatal: warn });
+  stops.push(() => tunnel.stop());
+  return () => stops.forEach((stop) => stop());
+}
+
+/**
+ * grog serve: keep every site in ~/.grog/sites.json online, and follow changes
+ * to the file. Each key is a host the relay serves (a site domain of ours or a
+ * name under the relay's domain); each value says what answers there.
+ */
+async function handleServe() {
+  const settings = tunnelSettings();
+  requireTunnelToken(settings);
+  const running = new Map();
+  const apply = async () => {
+    let sites;
+    try {
+      sites = JSON.parse(readFileSync(SITES_PATH, "utf8"));
+    } catch (error) {
+      console.error(`! cannot read ${SITES_PATH}: ${error.message}`);
+      return;
+    }
+    const wanted = new Map();
+    for (const [host, spec] of Object.entries(sites || {})) {
+      const name = host.toLowerCase().replace(/\.$/, "");
+      if (!HOST_PATTERN.test(name) || typeof spec !== "object" || spec === null) {
+        console.error(`! skipping ${host}: not a host name with a site description`);
+        continue;
+      }
+      wanted.set(name, JSON.stringify(spec));
+    }
+    for (const [host, entry] of running) {
+      if (wanted.get(host) !== entry.key) {
+        entry.stop();
+        running.delete(host);
+        console.log(`[${host}] stopped`);
+      }
+    }
+    for (const [host, key] of wanted) {
+      if (!running.has(host)) running.set(host, { key, stop: await startSite(host, JSON.parse(key), settings) });
+    }
+  };
+  await apply();
+  watchFile(SITES_PATH, { interval: 2000 }, () => apply().catch((error) => console.error(`! ${error.message}`)));
+  const quit = () => { for (const entry of running.values()) entry.stop(); process.exit(0); };
+  process.on("SIGINT", quit);
+  process.on("SIGTERM", quit);
   await new Promise(() => {});
 }
 
@@ -4838,7 +5034,8 @@ const COMMAND_HELP = {
   start: "grog start <linear-issue-url-or-identifier>",
   done: "grog done <linear-issue-url-or-identifier>",
   cancel: "grog cancel <linear-issue-url-or-identifier>",
-  up: "grog up <port>",
+  up: "grog up <port> [--domain <host>]",
+  serve: "grog serve   (keeps the sites in ~/.grog/sites.json online)",
   "tmux-name": "grog tmux-name <linear-issue-url-or-identifier|github-issue-or-pr-url|name>",
   contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID]",
   talk: "grog talk [--whatsapp|--telegram|--discord] [--all]",
@@ -4882,6 +5079,8 @@ function printHelp() {
   console.log("    grog cancel <issue-url|id>    mark a Linear issue as Canceled");
   console.log("    grog tmux-name <issue|name>   rename the tmux window you are working in (e.g. MTR-1334)");
   console.log("    grog up <port>                share localhost:<port> as a public https link (Ctrl-C closes it)");
+  console.log("    grog up <port> --domain <host> the same, on a fixed host (alienwatch.buzz, demo.grooooog.space)");
+  console.log("    grog serve                    keep the sites in ~/.grog/sites.json online");
   console.log("    grog contacts list            list saved messaging contacts");
   console.log("    grog talk                     connect a messaging bridge for remote interaction");
   console.log("    grog recv                     wait for the next inbound message");
@@ -5074,6 +5273,10 @@ async function main() {
 
     case "up":
       await handleUp(process.argv.slice(3));
+      break;
+
+    case "serve":
+      await handleServe();
       break;
 
     case "talk": {

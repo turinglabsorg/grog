@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -77,7 +77,7 @@ function up(args, extraEnv = {}) {
   child.stderr.on("data", (chunk) => (out += chunk));
   const url = new Promise((resolve) => {
     const timer = setInterval(() => {
-      const match = out.match(/https:\/\/([a-z0-9]+\.grog\.test)/);
+      const match = out.match(/https:\/\/([a-z0-9.-]+\.(?:grog|alien)\.test|alien\.test)\b/);
       if (match || out.includes("error")) {
         clearInterval(timer);
         resolve(match ? match[1] : out);
@@ -95,6 +95,10 @@ before(async () => {
   writeFileSync(join(scratch, "ext.cnf"), "subjectAltName=DNS:*.grog.test,DNS:grog.test\nextendedKeyUsage=serverAuth\n");
   sh(["x509", "-req", "-in", "req.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-days", "1", "-extfile", "ext.cnf", "-out", "cert.pem"]);
   writeFileSync(join(scratch, "token.sha256"), createHash("sha256").update("test-token").digest("hex"));
+  mkdirSync(join(scratch, "domains", "alien.test"), { recursive: true });
+  sh(["req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=alien.test", "-keyout", "domains/alien.test/privkey.pem", "-out", "alien.csr"]);
+  writeFileSync(join(scratch, "alien.cnf"), "subjectAltName=DNS:alien.test,DNS:*.alien.test\nextendedKeyUsage=serverAuth\n");
+  sh(["x509", "-req", "-in", "alien.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-days", "1", "-extfile", "alien.cnf", "-out", "domains/alien.test/fullchain.pem"]);
 
   app = http.createServer((req, res) => res.end(`hello ${req.url}`));
   app.on("upgrade", (req, socket) => {
@@ -105,20 +109,29 @@ before(async () => {
   appPort = app.address().port;
 
   httpsPort = await freePort();
-  const relay = spawn("python3", [relayPath], {
+  httpPort = await freePort();
+  await startRelay();
+});
+
+let httpPort;
+let relay;
+async function startRelay() {
+  relay = spawn("python3", [relayPath], {
     env: {
       ...process.env,
       GROG_RELAY_DOMAIN: "grog.test",
       GROG_RELAY_CERT: join(scratch, "cert.pem"),
       GROG_RELAY_KEY: join(scratch, "key.pem"),
       GROG_RELAY_TOKEN_SHA256: join(scratch, "token.sha256"),
+      GROG_RELAY_DOMAINS_DIR: join(scratch, "domains"),
       GROG_RELAY_HTTPS_PORT: String(httpsPort),
-      GROG_RELAY_HTTP_PORT: String(await freePort()),
+      GROG_RELAY_HTTP_PORT: String(httpPort),
+      GROG_RELAY_STATE: join(scratch, "state.json"),
     },
   });
   children.push(relay);
   await new Promise((resolve) => relay.stderr.on("data", (chunk) => String(chunk).includes("grog relay") && resolve()));
-});
+}
 
 test("refuses a port that is not one", { skip }, () => {
   const result = spawnSync(process.execPath, [cliPath, "up", "http"], { encoding: "utf8", env: env() });
@@ -198,4 +211,94 @@ test("a hostile relay gets nothing but streams to the one port", { skip }, async
   assert.equal(result.code, 1);
   assert.match(result.out, /unexpected reply/);
   assert.doesNotMatch(result.out, /evil\.example|\u001b/);
+});
+
+
+test("a site domain gets its own certificate and a fixed address", { skip }, async () => {
+  const { child, url } = up([String(appPort), "--domain", "alien.test"]);
+  assert.equal(await url, "alien.test");
+  assert.deepEqual(await get("alien.test", "/x"), { status: 200, body: "hello /x" });
+  child.kill();
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const offline = await get("alien.test");
+  assert.equal(offline.status, 404);
+  assert.match(offline.body, /This site is offline/);
+});
+
+test("fixed names: under our domain yes, reserved or foreign no", { skip }, async () => {
+  const demo = up([String(appPort), "--domain", "demo.grog.test"]);
+  assert.equal(await demo.url, "demo.grog.test");
+  assert.equal((await get("demo.grog.test")).status, 200);
+  demo.child.kill();
+  for (const name of ["up.grog.test", "a.b.grog.test", "example.com"]) {
+    const { url } = up([String(appPort), "--domain", name]);
+    assert.match(await url, /does not serve/, name);
+  }
+});
+
+test("a second claim takes the host over and the first one stops", { skip }, async () => {
+  const first = up([String(appPort), "--domain", "www.alien.test"]);
+  assert.equal(await first.url, "www.alien.test");
+  const exited = new Promise((resolve) => first.child.on("exit", resolve));
+  const second = up([String(appPort), "--domain", "www.alien.test"]);
+  assert.equal(await second.url, "www.alien.test");
+  assert.equal(await exited, 1);
+  assert.match(first.output(), /taken over/);
+  assert.equal((await get("www.alien.test")).status, 200);
+  second.child.kill();
+});
+
+test("grog serve keeps the sites of sites.json online, files only from their folder", { skip }, async () => {
+  const site = join(scratch, "site");
+  mkdirSync(join(site, "css"), { recursive: true });
+  writeFileSync(join(site, "index.html"), "<h1>alien</h1>");
+  writeFileSync(join(site, "css", "a.css"), "body{}");
+  writeFileSync(join(site, ".env"), "SECRET=1");
+  writeFileSync(join(scratch, "outside.txt"), "outside");
+  symlinkSync(join(scratch, "outside.txt"), join(site, "escape.txt"));
+  writeFileSync(join(scratch, "sites.json"), JSON.stringify({
+    "alien.test": { dir: site },
+    "go.alien.test": { redirect: "https://alien.test" },
+  }));
+  const serve = spawn(process.execPath, [cliPath, "serve"], { env: { ...env(), GROG_SITES: join(scratch, "sites.json") } });
+  children.push(serve);
+  let out = "";
+  serve.stdout.on("data", (chunk) => (out += chunk));
+  serve.stderr.on("data", (chunk) => (out += chunk));
+  for (let i = 0; i < 100 && (out.match(/-> localhost/g) || []).length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+
+  assert.deepEqual(await get("alien.test", "/"), { status: 200, body: "<h1>alien</h1>" });
+  assert.equal((await get("alien.test", "/css/a.css")).body, "body{}");
+  for (const path of ["/.env", "/%2e%2e/outside.txt", "/../outside.txt", "/escape.txt", "/css/../.env", "/nope.html"]) {
+    const result = await get("alien.test", path);
+    assert.equal(result.status, 404, path);
+    assert.doesNotMatch(result.body, /SECRET|outside/, path);
+  }
+  const moved = await new Promise((resolve) => https.get(
+    { host: "127.0.0.1", port: httpsPort, path: "/a?b=1", servername: "go.alien.test", headers: { host: "go.alien.test" }, ca: readFileSync(join(scratch, "ca.pem")) },
+    (res) => { res.resume(); resolve({ status: res.statusCode, location: res.headers.location }); }));
+  assert.deepEqual(moved, { status: 301, location: "https://alien.test/a?b=1" });
+
+  // Removing a site from the file takes it offline.
+  writeFileSync(join(scratch, "sites.json"), JSON.stringify({ "alien.test": { dir: site } }));
+  for (let i = 0; i < 100 && !out.includes("[go.alien.test] stopped"); i++) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.match((await get("go.alien.test")).body, /This site is offline/);
+  serve.kill();
+});
+
+
+test("a restarted relay gives reconnecting clients the same link", { skip }, async () => {
+  const { child, url, output } = up([String(appPort)]);
+  const host = await url;
+  assert.equal((await get(host)).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 6000)); // the state file is written within 5 s
+  const stopped = new Promise((resolve) => relay.on("exit", resolve));
+  relay.kill("SIGTERM");
+  await stopped;
+  await startRelay();
+  for (let i = 0; i < 150 && !output().includes("reconnected"); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.match(output(), /reconnected, same link/);
+  assert.deepEqual(await get(host, "/again"), { status: 200, body: "hello /again" });
+  child.kill();
 });
