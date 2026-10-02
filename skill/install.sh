@@ -726,6 +726,8 @@ A site on one of our domains (the list is `~/.config/grog-relay/sites`, e.g. `al
 - The file holds every site: edit it, keep it valid JSON, change only the host you were asked about.
 - Verify: `~/Library/Logs/grog-serve.log` shows `[host] > https://host -> localhost:...`; then open the address.
 - In a scott container, an app it serves must listen where `grog serve` runs (the Mac Pro host): use `dir` for static builds, or `run` so the host starts the app.
+- Serve a production build, never a dev server (`npm run dev`, `vite`, `next dev`): a site on our domain is public and always up. Build output (`dist/`, `build/`, `out/`) goes in `dir`; an app with its own server uses `run` with its production start command.
+- `run` starts the app on the Mac Pro host with the host's tools. Dependencies installed from a container have Linux binaries and may not start there: when the log shows the app exiting, prefer a static build in `dir`.
 - A domain that is not in the list needs the user first: its nameservers set to DigitalOcean at the registrar. Then follow "Adding a site domain" in grog's `tunnel/README.md` (DNS records, certificate with `renew.sh`).
 - `grog up <port> --domain demo.grooooog.space` gives a quick fixed name under grooooog.space; anything that must stay up goes in sites.json too.
 EOF

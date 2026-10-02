@@ -42,6 +42,8 @@ A site domain is never served by a one-off `grog up`. `grog serve` keeps every s
 - `port`: an app already listening on that port.
 - `run` + `port`: the command that starts the app (in `cwd`, with `PORT` set), restarted when it exits.
 
+A site is public and always up, so it is a production build, never a dev server (`npm run dev`, `vite`, `next dev`: dev servers have had bugs that read any file on the machine). Build output goes in `dir`; an app with its own server uses `run` with its production start command.
+
 On the Mac Pro `grog serve` runs as the launchd agent `space.grooooog.serve` (`KeepAlive`, log `~/Library/Logs/grog-serve.log`), so the sites come back after a crash or a reboot once the user session is up.
 
 ### Adding a site domain
