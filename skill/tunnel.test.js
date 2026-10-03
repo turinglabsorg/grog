@@ -214,6 +214,36 @@ test("a hostile relay gets nothing but streams to the one port", { skip }, async
 });
 
 
+test("a relay that falls silent is left, and the client reconnects", { skip }, async () => {
+  // A relay that answers once and then says nothing, never closing: what the
+  // client sees when the real relay or the network goes away without a reset.
+  const sockets = [];
+  let opens = 0;
+  const silent = tls.createServer({ cert: readFileSync(join(scratch, "cert.pem")), key: readFileSync(join(scratch, "key.pem")) }, (socket) => {
+    sockets.push(socket);
+    socket.on("error", () => {});
+    socket.once("data", () => {
+      opens += 1;
+      socket.write('{"url":"https://abcdefghij.grog.test","code":"abcdefghij","secret":"s"}\n');
+    });
+  });
+  await new Promise((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  const child = spawn(process.execPath, [cliPath, "up", String(appPort)], {
+    env: { ...env(), GROG_TUNNEL_PORT: String(silent.address().port), GROG_TUNNEL_SILENCE_MS: "500" },
+  });
+  children.push(child);
+  let out = "";
+  child.stdout.on("data", (chunk) => (out += chunk));
+  child.stderr.on("data", (chunk) => (out += chunk));
+  for (let i = 0; i < 200 && !out.includes("reconnected"); i++) await new Promise((r) => setTimeout(r, 50));
+  child.kill();
+  for (const socket of sockets) socket.destroy();
+  silent.close();
+  assert.match(out, /connection to the relay lost, reconnecting/);
+  assert.match(out, /reconnected, same link/);
+  assert.ok(opens >= 2);
+});
+
 test("a site domain gets its own certificate and a fixed address", { skip }, async () => {
   const { child, url } = up([String(appPort), "--domain", "alien.test"]);
   assert.equal(await url, "alien.test");

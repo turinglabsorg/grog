@@ -676,6 +676,11 @@ function handleTmuxName(args) {
  * GROG_TUNNEL_TOKEN, else from hush (the secret named by tunnel.tokenName,
  * GROG_TUNNEL_TOKEN by default), read into this process and never printed.
  */
+// The relay pings every control connection every 20 s. One that has heard
+// nothing for this long is dead, even when the system still calls it open: the
+// relay or the network went away without a reset (a restart, a sleep, a router).
+const TUNNEL_SILENCE_MS = 75000;
+
 function tunnelSettings() {
   const tunnel = loadGrogConfig().tunnel || {};
   const host = process.env.GROG_TUNNEL_HOST || tunnel.host || "up.grooooog.space";
@@ -685,6 +690,7 @@ function tunnelSettings() {
     port: Number(process.env.GROG_TUNNEL_PORT || tunnel.port || 443),
     token: process.env.GROG_TUNNEL_TOKEN || tunnel.token || tokenFromHush(tunnel.tokenName || "GROG_TUNNEL_TOKEN"),
     ca: process.env.GROG_TUNNEL_CA ? readFileSync(process.env.GROG_TUNNEL_CA) : undefined,
+    silenceMs: Number(process.env.GROG_TUNNEL_SILENCE_MS) || TUNNEL_SILENCE_MS,
   };
 }
 
@@ -767,6 +773,9 @@ function openTunnel({ port, domain = "", settings, say = console.log, warn = con
       port,
       (local) => {
         const remote = relayConnection(settings);
+        // No idle limit on a stream (a WebSocket may be quiet for long), but one
+        // whose relay side is gone must not hold a slot forever.
+        remote.setKeepAlive(true, 30000);
         remote.once("secureConnect", () => {
           remote.write(`${JSON.stringify({ op: "stream", code: session.code, secret: session.secret, id })}\n`);
           local.pipe(remote);
@@ -791,6 +800,12 @@ function openTunnel({ port, domain = "", settings, say = console.log, warn = con
     control = relayConnection(settings);
     let buffer = "";
     control.setEncoding("utf8");
+    // A silent relay is a lost one: dropping the connection lets the close
+    // handler below reconnect. Without this, a connection the relay closed
+    // without a reset stays open here, and the link stays offline for good.
+    const socket = control;
+    socket.setKeepAlive(true, 15000);
+    socket.setTimeout(settings.silenceMs, () => socket.destroy());
     control.once("secureConnect", () => {
       control.write(`${JSON.stringify({ op: "open", token: settings.token, label: `port ${port}`, domain: domain || undefined, code: session?.code, secret: session?.secret })}\n`);
     });

@@ -13,7 +13,7 @@ visitor ──https──▶ relay (droplet) ◀──tls── grog up ──�
 2. A visitor opens the link. The relay asks the client, over the control connection, for a stream.
 3. The client opens a new connection to the relay for it and one to `localhost:<port>`, and pipes the two. HTTP, keep-alive and WebSockets pass untouched.
 
-A link lives while `grog up` runs. On a dropped connection the client reclaims the same link within 90 seconds; after that it is gone. The relay keeps open links across its own restarts (`/var/lib/grog-relay/state.json`, readable by its user only), so a restart or a security update does not change any address.
+A link lives while `grog up` runs. On a dropped connection the client reclaims the same link within 90 seconds; after that it is gone. The relay pings the client every 20 seconds, and a control connection that hears nothing for 75 seconds counts as dropped: a relay or network that went away without a reset (a restart, a sleep, a router) would otherwise leave the client waiting on a dead connection and the link offline. The relay keeps open links across its own restarts (`/var/lib/grog-relay/state.json`, readable by its user only), so a restart or a security update does not change any address.
 
 ## Fixed addresses and site domains
 
@@ -77,7 +77,7 @@ systemctl daemon-reload && systemctl enable --now grog-relay
 
 ## Client settings
 
-`grog up` reads `~/.grog/config.json` `tunnel` (`host`, default `up.grooooog.space`; `tokenName`, default `GROG_TUNNEL_TOKEN`) or `GROG_TUNNEL_HOST` / `GROG_TUNNEL_TOKEN`.
+`grog up` reads `~/.grog/config.json` `tunnel` (`host`, default `up.grooooog.space`; `tokenName`, default `GROG_TUNNEL_TOKEN`) or `GROG_TUNNEL_HOST` / `GROG_TUNNEL_TOKEN`. `GROG_TUNNEL_SILENCE_MS` changes the 75-second silence limit (the tests shorten it).
 
 Dev servers that check the Host header need to allow the domain: Vite `server.allowedHosts: ['.grooooog.space']`, Next.js `allowedDevOrigins: ['*.grooooog.space']`.
 
