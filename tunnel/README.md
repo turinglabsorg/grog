@@ -37,10 +37,11 @@ A site domain is never served by a one-off `grog up`. `grog serve` keeps every s
 }
 ```
 
-- `dir`: static files, served by grog itself: nothing outside the folder (symlinks included), no hidden files or folders (`.env`, `.git`), GET and HEAD only, no listings.
-- `redirect`: a 301 to that address, keeping the path.
-- `port`: an app already listening on that port.
+- `dir`: static files, served by grog itself: nothing outside the folder (symlinks included), no hidden files or folders (`.env`, `.git`), GET and HEAD only, no listings. A scanner path is 404 and is not counted.
+- `redirect`: a 301 to that address, keeping the path. A scanner path is 404 instead, and is not counted.
+- `port`: an app already listening on that port. A scanner path is 404 from grog and never reaches the app. A known bot is proxied and not counted.
 - `run` + `port`: the command that starts the app (in `cwd`, with `PORT` set), restarted when it exits.
+- `board`: the live page for this `grog serve`. One host, password in `~/.grog/board-auth.json` (scrypt hash only). It lists every site and whether its tunnel is up, and the page views grog itself answered. Counts go to `~/.grog/board.sqlite`. A view is a document (no css, js, or images). A port site is counted by a localhost proxy in front of that port; `grog up` stays a raw pipe and counts nothing. Visitors are a first-party cookie, stored only as a hash. A referral is the previous site's host, or direct. A campaign keeps only `utm_source`, `utm_medium` and `utm_campaign`. The country is the two-letter code described below. The board also keeps a short log of those documents: time, host, path, country, referral, and campaign. Scanner paths (hidden files, dot segments, script leftovers, known panels) are answered 404 before the site and are not counted. A known bot user-agent is served and not counted. An empty user-agent is still counted.
 
 A site is public and always up, so it is a production build, never a dev server (`npm run dev`, `vite`, `next dev`: dev servers have had bugs that read any file on the machine). Build output goes in `dir`; an app with its own server uses `run` with its production start command.
 
@@ -60,6 +61,7 @@ On the Mac Pro `grog serve` runs as the launchd agent `space.grooooog.serve` (`K
 - **Links are unguessable, not secret.** The code is 10 random characters (50 bits); the wildcard certificate keeps codes out of certificate-transparency logs. Whoever has a link can open the app behind it, so the app is what is exposed: share links only for apps that are fine to show.
 - **The relay host holds no account credentials.** The certificate is obtained on the machine that has the DNS token (`renew.sh`) and only the certificate and key are copied to the relay.
 - **The relay is contained:** an unprivileged user with only `CAP_NET_BIND_SERVICE`, a hardened systemd unit (read-only filesystem, no home, 256 MB), bounded open links and waiting streams, and no logging of request contents. The droplet accepts SSH by key only, has a firewall open on 22/80/443 only, and applies security updates automatically.
+- **Site domains learn a country, and nothing else does.** For a host covered by a certificate in the domains directory, the relay adds `x-grog-country: IT` (where that visitor's network is registered) and drops any copy the visitor sent. The address is not logged and is not sent to the machine running `grog serve`, which removes the header before the site's own app sees the request. `grog up` links are not stamped: those bytes pass untouched. The table is `country.db` next to `relay.py`, built by `build_country.py` from the public RIR delegation files. A missing table means no header.
 
 ## Deploy
 
@@ -83,4 +85,4 @@ Dev servers that check the Host header need to allow the domain: Vite `server.al
 
 ## Test
 
-`skill/tunnel.test.js` runs the relay with a throwaway CA and checks the whole path: a page, parallel requests, a WebSocket, a wrong token, an unknown link, closing, a hostile relay, a site domain with its own certificate, fixed and refused names, a takeover, `grog serve` (static files, refused paths, redirects, removing a site) and a relay restart that keeps the link.
+`skill/tunnel.test.js` runs the relay with a throwaway CA and checks the whole path: a page, parallel requests, a WebSocket, a wrong token, an unknown link, closing, a hostile relay, a site domain with its own certificate, fixed and refused names, a takeover, `grog serve` (static files, refused paths, redirects, removing a site) and a relay restart that keeps the link. `tunnel/country_test.py` checks the country table and that only a site domain is stamped.

@@ -22,8 +22,12 @@ and the bytes are piped both ways, so HTTP, keep-alive and WebSockets all pass.
   in a state file (readable by the relay's user only), so clients reconnect to
   the same address within the grace period.
 - Nothing about requests is logged beyond counts.
+- A request for a site domain (a domain with a certificate here) is stamped
+  with `x-grog-country`, the country where that visitor's network is
+  registered. The address is looked up on the relay and is not logged or
+  sent on. `grog up` links are not stamped: their bytes pass untouched.
 
-Standard library only (Python 3.10+).
+Standard library only (Python 3.10+), plus country.py beside this file.
 """
 
 import asyncio
@@ -37,6 +41,8 @@ import secrets
 import signal
 import ssl
 import time
+
+import country
 
 DOMAIN = os.environ.get("GROG_RELAY_DOMAIN", "grooooog.space").lower()
 CONTROL_HOST = "up." + DOMAIN
@@ -192,6 +198,39 @@ def host_of(head):
         if name.strip().lower() == b"host":
             return value.strip().decode("latin-1").lower().rsplit(":", 1)[0] if b"]" not in value else ""
     return ""
+
+
+def stamp_country(head, ip):
+    """Drop a client-supplied country and, when we know one, write ours.
+
+    Bytes after the header block stay as they arrived. A head we could not
+    finish is left alone.
+    """
+    marker = b"\r\n\r\n"
+    at = head.find(marker)
+    if at < 0:
+        return head
+    lines = head[:at].split(b"\r\n")
+    kept = [lines[0]]
+    spoofed = False
+    for line in lines[1:]:
+        if line.split(b":", 1)[0].strip().lower() == b"x-grog-country":
+            spoofed = True
+            continue
+        kept.append(line)
+    cc = country.country_of(ip)
+    if not spoofed and not cc:
+        return head
+    if len(cc) == 2 and cc.isalpha() and cc.isupper():
+        kept.append(b"x-grog-country: " + cc.encode("ascii"))
+    return b"\r\n".join(kept) + head[at:]
+
+
+def prepare_head(head, host, ip):
+    """Stamp a site domain. Any other host, including a grog up link, is unchanged."""
+    if not site_of(host):
+        return head
+    return stamp_country(head, ip)
 
 
 async def close(writer):
@@ -351,8 +390,9 @@ async def serve_https(reader, writer):
         return await close(writer)
     stream_reader, stream_writer, done = stream
     tunnel.served += 1
+    peer = writer.get_extra_info("peername")
     try:
-        stream_writer.write(head)
+        stream_writer.write(prepare_head(head, host, peer[0] if peer else ""))
         await stream_writer.drain()
         await splice((reader, writer), (stream_reader, stream_writer))
     finally:

@@ -3,3 +3,5 @@ node_modules/
 .claude/
 skill/dist/
 __pycache__/
+tunnel/country.db
+tunnel/.rir-cache/

@@ -11,6 +11,7 @@ import net from "net";
 import tls from "tls";
 import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
 import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
+import { createBoard, createSites, createStats, listenCountingProxy, rejectScan, track } from "./board.js";
 
 // Load config from ~/.grog/config.json (primary) with .env fallback
 const __filename = fileURLToPath(import.meta.url);
@@ -744,7 +745,7 @@ const TUNNEL_MAX_STREAMS = 64;
  * relay pairs every visitor's connection with a stream this process opens for
  * it, so the machine needs no inbound access. Returns { stop }.
  */
-function openTunnel({ port, domain = "", settings, say = console.log, warn = console.error, onFatal }) {
+function openTunnel({ port, domain = "", settings, say = console.log, warn = console.error, onFatal, onState = () => {} }) {
   let session = null;
   let retry = 0;
   let streams = 0;
@@ -797,6 +798,7 @@ function openTunnel({ port, domain = "", settings, say = console.log, warn = con
 
   const connect = () => {
     if (stopped) return;
+    onState(session ? "reconnecting" : "connecting");
     control = relayConnection(settings);
     let buffer = "";
     control.setEncoding("utf8");
@@ -825,6 +827,7 @@ function openTunnel({ port, domain = "", settings, say = console.log, warn = con
           const previous = session?.url;
           session = reply;
           retry = 0;
+          onState("online");
           if (!previous) {
             say(`> ${reply.url} -> localhost:${port} on ${whereAmI()}`);
             say(domain
@@ -853,6 +856,7 @@ function openTunnel({ port, domain = "", settings, say = console.log, warn = con
     control.on("error", () => {});
     control.on("close", () => {
       if (stopped) return;
+      onState("reconnecting");
       const wait = Math.min(1000 * 2 ** retry, 10000);
       retry += 1;
       if (retry === 1) warn("! connection to the relay lost, reconnecting...");
@@ -983,32 +987,62 @@ function keepRunning(spec, say, warn) {
   return () => { stopped = true; if (child?.pid) { try { process.kill(-child.pid); } catch {} } };
 }
 
-async function startSite(host, spec, settings) {
+function siteKind(spec) {
+  if (spec.board) return "board";
+  if (spec.redirect) return "redirect";
+  if (spec.dir) return "dir";
+  if (spec.run) return "run";
+  return "port";
+}
+
+async function startSite(host, spec, settings, desk) {
   const say = (message) => console.log(`[${host}] ${message}`);
   const warn = (message) => console.error(`[${host}] ${message}`);
   const stops = [];
+  const mark = (state) => desk.sites.note(host, { kind: siteKind(spec), state });
   let port;
   try {
-    if (spec.redirect) {
-      const server = await listenLocal(redirectHandler(spec.redirect));
+    if (spec.board) {
+      if (!desk.board) {
+        warn("! board skipped: ~/.grog/board-auth.json is missing a password hash");
+        return () => {};
+      }
+      const server = await listenLocal(desk.board.handler);
+      port = server.address().port;
+      stops.push(() => server.close());
+    } else if (spec.redirect) {
+      const send = redirectHandler(spec.redirect);
+      const server = await listenLocal((req, res) => {
+        if (rejectScan(req, res)) return;
+        track(desk.stats, host, req, res);
+        send(req, res);
+      });
       port = server.address().port;
       stops.push(() => server.close());
     } else if (spec.dir) {
-      const server = await listenLocal(staticHandler(spec.dir));
+      const files = staticHandler(spec.dir);
+      const server = await listenLocal((req, res) => {
+        if (rejectScan(req, res)) return;
+        track(desk.stats, host, req, res);
+        files(req, res);
+      });
       port = server.address().port;
       stops.push(() => server.close());
     } else if (Number.isInteger(Number(spec.port)) && Number(spec.port) > 0) {
-      port = Number(spec.port);
       if (spec.run) stops.push(keepRunning(spec, say, warn));
+      const proxy = await listenCountingProxy(Number(spec.port), desk.stats, host);
+      port = proxy.address().port;
+      stops.push(() => proxy.close());
     } else {
-      warn("! needs one of: port, dir, redirect");
+      warn("! needs one of: port, dir, redirect, board");
       return () => {};
     }
   } catch (error) {
     warn(`! cannot start: ${error.message}`);
     return () => stops.forEach((stop) => stop());
   }
-  const tunnel = openTunnel({ port, domain: host, settings, say, warn, onFatal: warn });
+  mark("connecting");
+  const tunnel = openTunnel({ port, domain: host, settings, say, warn, onFatal: warn, onState: mark });
   stops.push(() => tunnel.stop());
   return () => stops.forEach((stop) => stop());
 }
@@ -1018,20 +1052,36 @@ async function startSite(host, spec, settings) {
  * to the file. Each key is a host the relay serves (a site domain of ours or a
  * name under the relay's domain); each value says what answers there.
  */
+function loadBoardAuth() {
+  const path = process.env.GROG_BOARD_AUTH || join(homedir(), ".grog", "board-auth.json");
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (!/^[0-9a-f]{32}$/.test(parsed.salt) || !/^[0-9a-f]{64}$/.test(parsed.hash)) return null;
+    return { salt: parsed.salt, hash: parsed.hash };
+  } catch {
+    return null;
+  }
+}
+
 async function handleServe() {
   const settings = tunnelSettings();
   requireTunnelToken(settings);
+  const stats = createStats({ dbPath: process.env.GROG_BOARD_DB || join(homedir(), ".grog", "board.sqlite") });
+  await stats.ready;
+  const sites = createSites();
+  const auth = loadBoardAuth();
+  const desk = { stats, sites, board: auth ? createBoard({ stats, sites, auth }) : null };
   const running = new Map();
   const apply = async () => {
-    let sites;
+    let configured;
     try {
-      sites = JSON.parse(readFileSync(SITES_PATH, "utf8"));
+      configured = JSON.parse(readFileSync(SITES_PATH, "utf8"));
     } catch (error) {
       console.error(`! cannot read ${SITES_PATH}: ${error.message}`);
       return;
     }
     const wanted = new Map();
-    for (const [host, spec] of Object.entries(sites || {})) {
+    for (const [host, spec] of Object.entries(configured || {})) {
       const name = host.toLowerCase().replace(/\.$/, "");
       if (!HOST_PATTERN.test(name) || typeof spec !== "object" || spec === null) {
         console.error(`! skipping ${host}: not a host name with a site description`);
@@ -1042,12 +1092,13 @@ async function handleServe() {
     for (const [host, entry] of running) {
       if (wanted.get(host) !== entry.key) {
         entry.stop();
+        desk.sites.forget(host);
         running.delete(host);
         console.log(`[${host}] stopped`);
       }
     }
     for (const [host, key] of wanted) {
-      if (!running.has(host)) running.set(host, { key, stop: await startSite(host, JSON.parse(key), settings) });
+      if (!running.has(host)) running.set(host, { key, stop: await startSite(host, JSON.parse(key), settings, desk) });
     }
   };
   await apply();
@@ -5050,7 +5101,7 @@ const COMMAND_HELP = {
   done: "grog done <linear-issue-url-or-identifier>",
   cancel: "grog cancel <linear-issue-url-or-identifier>",
   up: "grog up <port> [--domain <host>]",
-  serve: "grog serve   (keeps the sites in ~/.grog/sites.json online)",
+  serve: "grog serve   (keeps the sites in ~/.grog/sites.json online, and a {board:true} host shows the live page)",
   "tmux-name": "grog tmux-name <linear-issue-url-or-identifier|github-issue-or-pr-url|name>",
   contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID]",
   talk: "grog talk [--whatsapp|--telegram|--discord] [--all]",
@@ -5095,7 +5146,7 @@ function printHelp() {
   console.log("    grog tmux-name <issue|name>   rename the tmux window you are working in (e.g. MTR-1334)");
   console.log("    grog up <port>                share localhost:<port> as a public https link (Ctrl-C closes it)");
   console.log("    grog up <port> --domain <host> the same, on a fixed host (alienwatch.buzz, demo.grooooog.space)");
-  console.log("    grog serve                    keep the sites in ~/.grog/sites.json online");
+  console.log("    grog serve                    keep ~/.grog/sites.json online; a {\"board\":true} host is the live page");
   console.log("    grog contacts list            list saved messaging contacts");
   console.log("    grog talk                     connect a messaging bridge for remote interaction");
   console.log("    grog recv                     wait for the next inbound message");
