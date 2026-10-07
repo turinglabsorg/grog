@@ -49,9 +49,11 @@ On the Mac Pro `grog serve` runs as the launchd agent `space.grooooog.serve` (`K
 
 ### Adding a site domain
 
-1. At the registrar, set the domain's nameservers to `ns1.digitalocean.com`, `ns2.digitalocean.com`, `ns3.digitalocean.com`.
-2. In DigitalOcean DNS (the account with the relay), add the domain with `A @`, `A www` and `A *` pointing at the relay.
-3. Add the domain to `~/.config/grog-relay/sites` and run `renew.sh`: it gets the apex + wildcard certificate and installs it on the relay, which picks it up at once. The weekly run keeps it renewed.
+1. Pick the DNS that serves the domain:
+   - DigitalOcean: at the registrar, set the nameservers to `ns1.digitalocean.com`, `ns2.digitalocean.com`, `ns3.digitalocean.com`, and add the domain in DigitalOcean DNS (the account with the relay).
+   - Cloudflare: add the domain as a zone in the Cloudflare account and make it active. The hush token named by `GROG_RELAY_CLOUDFLARE_TOKEN_NAME` (default `CLOUDFLARE_PERSONAL_TOKEN`) needs DNS edit on that zone.
+2. Add `A @`, `A www` and `A *` pointing at the relay. On Cloudflare the proxy stays off (DNS only): the relay terminates TLS with its own certificate.
+3. Add the domain to `~/.config/grog-relay/sites`, followed by `cloudflare` when Cloudflare serves its DNS (`alienwatch.buzz cloudflare`), and run `renew.sh`: it gets the apex + wildcard certificate and installs it on the relay, which picks it up at once. The weekly run keeps it renewed.
 4. Add its hosts to `~/.grog/sites.json`.
 
 ## Security
@@ -59,7 +61,7 @@ On the Mac Pro `grog serve` runs as the launchd agent `space.grooooog.serve` (`K
 - **The machine running `grog up` accepts no inbound connection.** The client dials out and only ever connects to the one port it was started with, on loopback. It runs no commands and reads no files; it checks every message from the relay, so a relay in the wrong hands could still only send traffic to that port.
 - **Only token holders open links.** The token is 32 random bytes kept in hush (`GROG_TUNNEL_TOKEN`); grog reads it from there and never prints it. The relay stores its SHA-256 only (`/etc/grog-relay/token.sha256`). To rotate: `hush generate GROG_TUNNEL_TOKEN --force`, then write the new hash to the relay.
 - **Links are unguessable, not secret.** The code is 10 random characters (50 bits); the wildcard certificate keeps codes out of certificate-transparency logs. Whoever has a link can open the app behind it, so the app is what is exposed: share links only for apps that are fine to show.
-- **The relay host holds no account credentials.** The certificate is obtained on the machine that has the DNS token (`renew.sh`) and only the certificate and key are copied to the relay.
+- **The relay host holds no account credentials.** The certificate is obtained on the machine that has the DNS tokens (`renew.sh`) and only the certificate and key are copied to the relay.
 - **The relay is contained:** an unprivileged user with only `CAP_NET_BIND_SERVICE`, a hardened systemd unit (read-only filesystem, no home, 256 MB), bounded open links and waiting streams, and no logging of request contents. The droplet accepts SSH by key only, has a firewall open on 22/80/443 only, and applies security updates automatically.
 - **Site domains learn a country, and nothing else does.** For a host covered by a certificate in the domains directory, the relay adds `x-grog-country: IT` (where that visitor's network is registered) and drops any copy the visitor sent. The address is not logged and is not sent to the machine running `grog serve`, which removes the header before the site's own app sees the request. `grog up` links are not stamped: those bytes pass untouched. The table is `country.db` next to `relay.py`, built by `build_country.py` from the public RIR delegation files. A missing table means no header.
 
@@ -75,7 +77,7 @@ cp relay.py /opt/grog-relay/ && cp grog-relay.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now grog-relay
 ```
 
-`renew.sh` gets or renews the certificates with [lego](https://go-acme.github.io/lego/) and DigitalOcean DNS, from the machine that keeps the DNS token in hush: the relay's wildcard, and apex + wildcard of every site domain in `~/.config/grog-relay/sites`. It installs what changed on the relay and reloads it; run it weekly (a launchd or cron job). Settings: `GROG_RELAY_DOMAIN`, `GROG_RELAY_SSH`, `GROG_RELAY_DNS_TOKEN_NAME`, `GROG_RELAY_LEGO_DIR`, `GROG_RELAY_SITES_FILE`.
+`renew.sh` gets or renews the certificates with [lego](https://go-acme.github.io/lego/) and a DNS-01 challenge, from the machine that keeps the DNS tokens in hush: the relay's wildcard, and apex + wildcard of every site domain in `~/.config/grog-relay/sites`. Each line of that file is a domain, optionally followed by the DNS that serves it: `digitalocean` (the default) or `cloudflare`. It installs what changed on the relay and reloads it; a site that fails is reported, the others still renew, and the script exits 1. Run it weekly (a launchd or cron job). Settings: `GROG_RELAY_DOMAIN`, `GROG_RELAY_SSH`, `GROG_RELAY_DNS_TOKEN_NAME` (DigitalOcean), `GROG_RELAY_CLOUDFLARE_TOKEN_NAME`, `GROG_RELAY_LEGO_DIR`, `GROG_RELAY_SITES_FILE`.
 
 ## Client settings
 
