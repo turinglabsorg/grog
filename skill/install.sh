@@ -85,11 +85,10 @@ echo "  > skill directories"
 
 echo ""
 echo -e "${BOLD}[2/8]${NC} copying files..."
-cp "$SCRIPT_DIR/index.js" "$TOOLS_DIR/"
-cp "$SCRIPT_DIR/discord-client.js" "$TOOLS_DIR/"
-cp "$SCRIPT_DIR/package.json" "$TOOLS_DIR/"
-cp "$SCRIPT_DIR/package-lock.json" "$TOOLS_DIR/"
-echo "  > index.js, discord-client.js, package.json and package-lock.json"
+for file in index.js board.js discord-client.js github-issues.js package.json package-lock.json; do
+  cp "$SCRIPT_DIR/$file" "$TOOLS_DIR/"
+done
+echo "  > index.js, its modules, package.json and package-lock.json"
 
 echo ""
 echo -e "${BOLD}[3/8]${NC} installing dependencies..."
