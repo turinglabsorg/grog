@@ -913,7 +913,8 @@ const SITES_PATH = process.env.GROG_SITES || join(homedir(), ".grog", "sites.jso
 const MIME = {
   ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".json": "application/json",
-  ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+  ".txt": "text/plain; charset=utf-8", ".md": "text/markdown; charset=utf-8", ".sh": "text/plain; charset=utf-8",
+  ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon", ".avif": "image/avif",
   ".woff": "font/woff", ".woff2": "font/woff2", ".pdf": "application/pdf", ".xml": "application/xml",
   ".webmanifest": "application/manifest+json", ".mp4": "video/mp4", ".webm": "video/webm",
