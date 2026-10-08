@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { basename, dirname, join, resolve, sep } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync, realpathSync, createReadStream, watchFile } from "fs";
 import { homedir, hostname } from "os";
-import { execFileSync, execSync, spawn } from "child_process";
+import { execFileSync, spawn } from "child_process";
 import http from "http";
 import net from "net";
 import tls from "tls";
@@ -43,6 +43,7 @@ const TELEGRAM_BOT_TOKEN = grogConfig.telegramBotToken || process.env.TELEGRAM_B
 const TELEGRAM_CHAT_ID = grogConfig.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_STATE_FILE = "/tmp/grog-telegram-state.json";
 const TELEGRAM_DOWNLOAD_DIR = "/tmp/grog-telegram-files";
+const TELEGRAM_API = process.env.GROG_TELEGRAM_API || "https://api.telegram.org";
 
 const DISCORD_BOT_TOKEN = grogConfig.discordBotToken || process.env.DISCORD_BOT_TOKEN;
 const DISCORD_CHANNEL_ID = grogConfig.discordChannelId || process.env.DISCORD_CHANNEL_ID;
@@ -3778,13 +3779,36 @@ async function telegramApi(method, params = {}) {
     console.error("  create a bot at https://t.me/BotFather and add the token");
     process.exit(1);
   }
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`;
+  const url = `${TELEGRAM_API}/bot${TELEGRAM_BOT_TOKEN}/${method}`;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
   const data = await response.json();
+  if (!data.ok) {
+    throw new Error(`Telegram API error: ${data.description}`);
+  }
+  return data.result;
+}
+
+/** The bot token is part of every API URL: keep it out of anything printed. */
+function hideTelegramToken(text) {
+  return TELEGRAM_BOT_TOKEN ? String(text).split(TELEGRAM_BOT_TOKEN).join("[token]") : String(text);
+}
+
+/**
+ * Upload a file as multipart form data, without a shell or curl: a caption is
+ * sent as plain text whatever it holds, quotes and a leading @ or < included.
+ */
+async function telegramUpload(method, field, filePath, params = {}) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") form.append(key, String(value));
+  }
+  form.append(field, new Blob([readFileSync(filePath)]), basename(filePath));
+  const response = await fetch(`${TELEGRAM_API}/bot${TELEGRAM_BOT_TOKEN}/${method}`, { method: "POST", body: form });
+  const data = await response.json().catch(() => ({ ok: false, description: `HTTP ${response.status}` }));
   if (!data.ok) {
     throw new Error(`Telegram API error: ${data.description}`);
   }
@@ -3801,7 +3825,7 @@ async function downloadTelegramFile(fileId, fileName) {
 
   const safeName = sanitizeTelegramFileName(fileName || basename(file.file_path));
   const localPath = join(TELEGRAM_DOWNLOAD_DIR, `${Date.now()}-${safeName}`);
-  const url = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+  const url = `${TELEGRAM_API}/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`;
   const response = await fetch(url);
 
   if (!response.ok) {
@@ -4003,21 +4027,11 @@ async function handleTelegramSendImage(args) {
     process.exit(1);
   }
 
-  const captionArg = caption ? `-F "caption=${caption}"` : "";
-
   try {
-    const cmd = `curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" -F "chat_id=${chatId}" -F "photo=@${imagePath}" ${captionArg}`;
-    const result = execSync(cmd, { encoding: "utf-8" });
-    const data = JSON.parse(result);
-
-    if (!data.ok) {
-      console.error(`! error: Telegram API error: ${data.description}`);
-      process.exit(1);
-    }
-
+    await telegramUpload("sendPhoto", "photo", imagePath, { chat_id: chatId, caption });
     console.log(`> image sent to Telegram${target ? ` (${target.label})` : ""}`);
   } catch (err) {
-    console.error(`! error: failed to send image: ${err.message}`);
+    console.error(`! error: failed to send image: ${hideTelegramToken(err.message)}`);
     process.exit(1);
   }
 }
@@ -4056,30 +4070,11 @@ async function handleTelegramSendDocument(args) {
     process.exit(1);
   }
 
-  const curlArgs = [
-    "-sS",
-    "-X",
-    "POST",
-    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`,
-    "-F",
-    `chat_id=${chatId}`,
-    "-F",
-    `document=@${documentPath}`,
-  ];
-  if (caption) curlArgs.push("-F", `caption=${caption}`);
-
   try {
-    const result = execFileSync("curl", curlArgs, { encoding: "utf-8" });
-    const data = JSON.parse(result);
-
-    if (!data.ok) {
-      console.error(`! error: Telegram API error: ${data.description}`);
-      process.exit(1);
-    }
-
+    await telegramUpload("sendDocument", "document", documentPath, { chat_id: chatId, caption });
     console.log(`> document sent to Telegram${target ? ` (${target.label})` : ""}`);
   } catch (err) {
-    console.error(`! error: failed to send document: ${err.message}`);
+    console.error(`! error: failed to send document: ${hideTelegramToken(err.message)}`);
     process.exit(1);
   }
 }
