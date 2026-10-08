@@ -283,6 +283,8 @@ test("grog serve keeps the sites of sites.json online, files only from their fol
   mkdirSync(join(site, "css"), { recursive: true });
   writeFileSync(join(site, "index.html"), "<h1>alien</h1>");
   writeFileSync(join(site, "css", "a.css"), "body{}");
+  writeFileSync(join(site, "AGENTS.md"), "# Read me");
+  writeFileSync(join(site, "install.sh"), "#!/bin/sh");
   writeFileSync(join(site, ".env"), "SECRET=1");
   writeFileSync(join(scratch, "outside.txt"), "outside");
   symlinkSync(join(scratch, "outside.txt"), join(site, "escape.txt"));
@@ -299,6 +301,12 @@ test("grog serve keeps the sites of sites.json online, files only from their fol
 
   assert.deepEqual(await get("alien.test", "/"), { status: 200, body: "<h1>alien</h1>" });
   assert.equal((await get("alien.test", "/css/a.css")).body, "body{}");
+  // Text a browser opens is served as text, not as a download.
+  const type = (path) => new Promise((resolve) => https.get(
+    { host: "127.0.0.1", port: httpsPort, path, servername: "alien.test", headers: { host: "alien.test" }, ca: readFileSync(join(scratch, "ca.pem")) },
+    (res) => { res.resume(); resolve(res.headers["content-type"]); }));
+  assert.equal(await type("/AGENTS.md"), "text/markdown; charset=utf-8");
+  assert.equal(await type("/install.sh"), "text/plain; charset=utf-8");
   for (const path of ["/.env", "/%2e%2e/outside.txt", "/../outside.txt", "/escape.txt", "/css/../.env", "/nope.html"]) {
     const result = await get("alien.test", path);
     assert.equal(result.status, 404, path);
