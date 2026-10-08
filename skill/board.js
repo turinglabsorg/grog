@@ -15,6 +15,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { dirname } from "node:path";
+import { deflateSync } from "node:zlib";
 
 const ASSETS = new Set([
   ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
@@ -445,7 +446,8 @@ function page(body) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>grog serve</title>
+<title>GROG</title>
+<link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -697,8 +699,87 @@ function readBody(req, limit = 1024) {
   });
 }
 
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges"><rect width="16" height="16" fill="#000"/><g fill="#fff"><rect x="3" y="2" width="10" height="2"/><rect x="3" y="4" width="2" height="10"/><rect x="3" y="12" width="10" height="2"/><rect x="11" y="8" width="2" height="4"/><rect x="7" y="7" width="6" height="2"/></g></svg>`;
+
+function faviconIco() {
+  const rows = [
+    "................",
+    "................",
+    "...XXXXXXXXXX...",
+    "...XXXXXXXXXX...",
+    "...XX...........",
+    "...XX...........",
+    "...XX...........",
+    "...XX..XXXXXX...",
+    "...XX..XXXXXX...",
+    "...XX......XX...",
+    "...XX......XX...",
+    "...XX......XX...",
+    "...XXXXXXXXXX...",
+    "...XXXXXXXXXX...",
+    "................",
+    "................",
+  ];
+  const raw = Buffer.alloc(16 * (1 + 16 * 4));
+  rows.forEach((row, y) => {
+    const at = y * (1 + 64);
+    raw[at] = 0;
+    for (let x = 0; x < 16; x += 1) {
+      const on = row[x] === "X" ? 255 : 0;
+      const pixel = at + 1 + x * 4;
+      raw[pixel] = on;
+      raw[pixel + 1] = on;
+      raw[pixel + 2] = on;
+      raw[pixel + 3] = 255;
+    }
+  });
+  const idat = deflateSync(raw);
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(16, 0);
+  ihdr.writeUInt32BE(16, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const png = Buffer.concat([
+    sig,
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", idat),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+  const dir = Buffer.alloc(22);
+  dir.writeUInt16LE(1, 2);
+  dir.writeUInt16LE(1, 4);
+  dir[6] = 16;
+  dir[7] = 16;
+  dir.writeUInt16LE(1, 10);
+  dir.writeUInt16LE(32, 12);
+  dir.writeUInt32LE(png.length, 14);
+  dir.writeUInt32LE(22, 18);
+  return Buffer.concat([dir, png]);
+}
+
+function pngChunk(type, data) {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 4, "ascii");
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type), data])) >>> 0, 0);
+  return Buffer.concat([head, data, crc]);
+}
+
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (const byte of buf) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return crc ^ 0xffffffff;
+}
+
+const FAVICON_ICO = faviconIco();
+
 function send(res, status, body, headers = {}) {
-  const payload = Buffer.from(body);
+  const payload = Buffer.isBuffer(body) ? body : Buffer.from(body);
   res.writeHead(status, {
     "Content-Type": "text/html; charset=utf-8",
     "Content-Length": payload.length,
@@ -733,6 +814,18 @@ export function createBoard({ stats, sites, auth }) {
   async function handler(req, res) {
     let path = "/";
     try { path = new URL(req.url || "/", "http://board").pathname; } catch { path = "/"; }
+    if (req.method === "GET" && (path === "/favicon.svg" || path === "/favicon.ico")) {
+      if (path === "/favicon.svg") {
+        return send(res, 200, FAVICON_SVG, {
+          "Content-Type": "image/svg+xml",
+          "Cache-Control": "public, max-age=86400",
+        });
+      }
+      return send(res, 200, FAVICON_ICO, {
+        "Content-Type": "image/x-icon",
+        "Cache-Control": "public, max-age=86400",
+      });
+    }
     if (req.method === "POST" && path === "/login") {
       if (limited()) return send(res, 429, loginHtml("slow down"));
       let body = "";

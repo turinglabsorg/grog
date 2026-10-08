@@ -12,6 +12,7 @@ Black page, white type, one-pixel white lines. It should read as a terminal, not
 - At 721px and wider, tables use `white-space: nowrap`, `width: max-content`, and `min-width: 100%`. A table that is wider than the window scrolls sideways inside its box.
 - At 720px and below there are no sideways tables. Each site, day, page, referral, campaign, country, and log line is a stacked block. Text wraps. The wordmark uses `clamp(8px, 2.8vw, 13px)` so the five lines stay intact. The password form is a column, full width, still 16px and 44px tall.
 - No second color, no radius, no shadow, no imagery besides the GROG wordmark.
+- The browser tab is titled GROG. Its icon is a 16×16 black square with a white pixel G, linked as `/favicon.svg` and also served at `/favicon.ico`. Both icons are public, before the password check.
 
 ## Page
 

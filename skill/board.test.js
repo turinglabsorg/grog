@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { inflateSync } from "node:zlib";
 import {
   checkPassword,
   createBoard,
@@ -39,16 +40,31 @@ function call(port, options, body) {
     const request = http.request({ hostname: "127.0.0.1", port, ...options }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
-      res.on("end", () => resolve({
-        status: res.statusCode,
-        headers: res.headers,
-        body: Buffer.concat(chunks).toString("utf8"),
-      }));
+      res.on("end", () => {
+        const raw = Buffer.concat(chunks);
+        resolve({
+          status: res.statusCode,
+          headers: res.headers,
+          body: raw.toString("utf8"),
+          raw,
+        });
+      });
     });
     request.on("error", reject);
     if (body) request.write(body);
     request.end();
   });
+}
+
+function pngIdat(ico) {
+  let at = 30;
+  while (at + 12 <= ico.length) {
+    const length = ico.readUInt32BE(at);
+    const type = ico.subarray(at + 4, at + 8).toString("ascii");
+    if (type === "IDAT") return ico.subarray(at + 8, at + 8 + length);
+    at += 12 + length;
+  }
+  throw new Error("favicon png has no IDAT");
 }
 
 test("a view is a document, not an asset", () => {
@@ -156,7 +172,29 @@ test("the board page stays locked until the password, then shows the live sites"
     const locked = await call(port, { path: "/", method: "GET" });
     assert.equal(locked.status, 200);
     assert.match(locked.body, /password/);
+    assert.match(locked.body, /<title>GROG<\/title>/);
+    assert.match(locked.body, /rel="icon" href="\/favicon\.svg\?v=2"/);
+    assert.doesNotMatch(locked.body, /setInterval/);
     assert.doesNotMatch(locked.body, /alien\.test/);
+    const svg = await call(port, { path: "/favicon.svg", method: "GET" });
+    assert.equal(svg.status, 200);
+    assert.match(svg.headers["content-type"], /^image\/svg\+xml/);
+    assert.match(svg.body, /<svg/);
+    assert.match(svg.body, /fill="#000"/);
+    assert.match(svg.body, /fill="#fff"/);
+    assert.doesNotMatch(svg.body, /password/);
+    const ico = await call(port, { path: "/favicon.ico", method: "GET" });
+    assert.equal(ico.status, 200);
+    assert.match(ico.headers["content-type"], /^image\/x-icon/);
+    assert.equal(ico.raw[0], 0);
+    assert.equal(ico.raw[1], 0);
+    assert.equal(ico.raw[2], 1);
+    assert.equal(ico.raw[6], 16);
+    assert.equal(ico.raw[7], 16);
+    assert.equal(ico.raw.subarray(22, 30).toString("hex"), "89504e470d0a1a0a");
+    assert.equal(inflateSync(pngIdat(ico.raw)).length, 16 * (1 + 16 * 4));
+    assert.doesNotMatch(ico.body, /<!doctype/i);
+    assert.doesNotMatch(ico.body, /password/);
     const wordmark = locked.body.match(/<pre>([\s\S]*?)<\/pre>/)[1].split("\n");
     assert.equal(wordmark.length, 5);
     assert.ok(wordmark.every((line) => line.length === wordmark[0].length));
@@ -169,6 +207,11 @@ test("the board page stays locked until the password, then shows the live sites"
     assert.equal(good.status, 303);
     const cookie = good.headers["set-cookie"][0].split(";")[0];
     const open = await call(port, { path: "/", method: "GET", headers: { cookie } });
+    assert.match(open.body, /<title>GROG<\/title>/);
+    assert.match(open.body, /rel="icon" href="\/favicon\.svg\?v=2"/);
+    assert.match(open.body, /setInterval/);
+    assert.match(open.body, /fetch\("\/api\/snapshot"/);
+    assert.match(open.body, /, 2000\)/);
     assert.match(open.body, /alien\.test/);
     assert.match(open.body, /online/);
     assert.match(open.body, /referrals today/);
