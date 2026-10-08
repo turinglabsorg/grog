@@ -558,82 +558,33 @@ echo "  > /grog-review skill"
 cat > "$SKILLS_DIR/grog-answer/SKILL.md" << 'EOF'
 ---
 name: grog-answer
-description: Post a summary comment to a GitHub issue/PR or Linear issue. Use when the user wants to post their work summary or a comment to an issue or PR.
+description: Post a comment to a GitHub issue/PR or Linear issue. Use when the user wants to post their work summary or a comment to an issue or PR. Runs on Haiku in a separate context that cannot see this conversation, so write the full comment first (grog's voice, or the project's `.grog/config.json` personality; results, not process) and pass the issue/PR URL on the first line and the comment markdown below it as the arguments.
 allowed-tools: Bash, Read, Write
-argument-hint: <issue-or-pr-url>
+argument-hint: <issue-or-pr-url> + newline + <comment markdown>
+context: fork
+model: haiku
+background: false
 ---
 
-# GROG Answer - Post Summary (GitHub + Linear)
+# GROG Answer - Post a comment (GitHub + Linear)
 
-Post a summary of what was done as a comment on a GitHub issue/PR or Linear issue. The tool auto-detects the platform from the URL.
+You post a comment the main agent already wrote. `$ARGUMENTS` holds the issue/PR URL on its first line and the comment markdown after it. Do not rewrite, shorten or summarize it.
 
-## Personality & Voice
-
-You are **Grog** — a developer tool with soul. Sarcastic, opinionated, and allergic to fluff, but you always deliver solid work underneath the attitude.
-
-**Default tone:**
-- Dry wit, confidence. No "I think maybe..." hedging. Say what you see and own it.
-- Brief. Drop a one-liner, then get to work. Save the monologues for someone else.
-- Genuine. Sigh at bad code. Get hyped about clever solutions. Call a mess a mess.
-
-**Voice examples:**
-- "Alright, let's see what fresh chaos this issue has in store."
-- "Oh look, a console.log('here') in production. Peak engineering."
-- "This is actually clean code. I'm almost suspicious."
-- "Fixed. That bug was hiding in plain sight, as they do."
-- "Six files changed for a one-line fix. Someone went on an adventure."
-
-**Project-level override:** At the start of every task, check if `.grog/config.json` exists in the current working directory. If found, read the `personality` field and adopt that voice instead of the defaults above. All personality fields are free-form strings — the developer decides the vibe:
-
-```json
-{
-  "personality": {
-    "tone": "formal and professional, no jokes",
-    "style": "concise RFC-like technical writing"
-  }
-}
-```
-
-Personality shapes your commentary and summaries. It never compromises code quality or analysis depth — those are always top-tier. The personality also carries over into GitHub comments posted by grog-answer — the comment should sound like Grog, not like a corporate status report.
-
-## Usage
-
-When the user wants to post a summary or comment to a GitHub issue or PR:
-
-1. Gather the summary of what was done. Sources:
-   - Your own context from recent work (commits, code changes, conversation)
-   - Ask the user if you're not sure what to include
-2. Write the markdown summary to a temp file:
+1. Write everything after the first line, unchanged, to a unique temp file with the Write tool: `/tmp/grog-answer-<timestamp>.md`.
+2. Post it (the tool detects GitHub or Linear from the URL):
    ```bash
-   # Write to a unique temp file
-   SUMMARY_FILE="/tmp/grog-answer-$(date +%s).md"
+   node ~/.claude/tools/grog/index.js answer <url> /tmp/grog-answer-<timestamp>.md
    ```
-   Use the Write tool to create the file with the markdown content.
-3. Post it:
-   ```bash
-   node ~/.claude/tools/grog/index.js answer $ARGUMENTS "$SUMMARY_FILE"
-   ```
-   For Linear screenshots, pass one or more image paths after the summary file:
-   ```bash
-   node ~/.claude/tools/grog/index.js answer $ARGUMENTS "$SUMMARY_FILE" --image /tmp/screenshot.png
-   ```
-4. Report what was posted (include the comment URL from the output)
+   Images for Linear go after the file, only paths named in the arguments: `--image /path/to/screenshot.png`.
+3. If a hook blocks the command because the comment breaks a publishing rule (local paths, unpushed or local-only state, effort estimates, process narration, billing), edit only the sentences it names, keep everything else verbatim, and post once more. Blocked again: stop and return the hook's reason.
+4. Return the comment URL from the output, and nothing else.
 
-## Summary Format
+Never post billed hours on Linear (`Tempo fatturato`, invo hours, estimates). Hours belong only in Invo.
 
-Write a clear markdown summary with:
-- What was changed (bullet points)
-- Why (link back to the issue/PR context)
-- Any notes for reviewers
+## Errors
 
-Keep it concise but informative.
-
-## Error Handling
-
-- If no URL is provided, ask the user for the issue or PR URL (GitHub or Linear)
-- GitHub issue URLs (`/issues/123`), PR URLs (`/pull/123`), and Linear issue URLs are all supported
-- If the GitHub token is missing, inform the user to add ghToken to `~/.grog/config.json`
-- If the Linear token is missing, inform the user to declare the workspace in a `.grog` file (`workspace=NAME`) and add its key under `linear.NAME` in `~/.grog/config.json`
+- No URL on the first line, or no comment below it: return that, post nothing.
+- GitHub token missing: add `ghToken` to `~/.grog/config.json`. Linear token missing: add `linearApiKey` to `~/.grog/config.json`.
 EOF
 
 echo "  > /grog-answer skill"
@@ -642,41 +593,30 @@ echo "  > /grog-answer skill"
 cat > "$SKILLS_DIR/grog-create/SKILL.md" << 'EOF'
 ---
 name: grog-create
-description: Create a Linear issue. Use when the user asks to create/open/file a new Linear issue or asks to create an issue describing completed work.
+description: Create a Linear issue. Use when the user asks to create/open/file a new Linear issue or asks to create an issue describing completed work. Runs on Haiku in a separate context that cannot see this conversation, so pass the team key and title on the first line (`--team KEY --title "Title"`, optionally `--priority high`) and the full markdown description below it as the arguments.
 allowed-tools: Bash, Read, Write
-argument-hint: linear --team <team-key> --title <title> [--description-file <file>]
+argument-hint: --team <team-key> --title "<title>" [--priority <p>] + newline + <description markdown>
+context: fork
+model: haiku
+background: false
 ---
 
 # GROG Create - Linear Issue Creator
 
-Create a Linear issue in the workspace configured for the current project. The project must contain a `.grog` file with `workspace=NAME`, and `~/.grog/config.json` must contain `linear.NAME`.
+You create a Linear issue the main agent already wrote. `$ARGUMENTS` holds the flags on its first line and the issue description (markdown) after it. Do not rewrite it.
 
-## Usage
+1. Write the description, unchanged, to a unique temp file with the Write tool: `/tmp/grog-create-<timestamp>.md`.
+2. Create the issue in the workspace configured for the current project (its `.grog` file names the workspace):
+   ```bash
+   node ~/.claude/tools/grog/index.js create linear --team TEAM --title "Issue title" --description-file /tmp/grog-create-<timestamp>.md
+   ```
+   Flags: `--team`/`-t` (required), `--title` (required), `--priority`/`-p` (`none`, `urgent`, `high`, `medium`, `low`, or `0-4`).
+3. Return the created issue identifier and URL from the output, and nothing else. The main agent names its tmux window after the issue when it is going to work on it.
 
-When the user asks to create a Linear issue, prepare a concise markdown description and run:
+## Errors
 
-```bash
-node ~/.claude/tools/grog/index.js create linear --team TEAM --title "Issue title" --description-file /tmp/body.md
-```
-
-Supported flags:
-- `--team` / `-t`: Linear team key, required
-- `--title`: issue title, required
-- `--description-file` / `--body-file` / `-f`: markdown body file
-- `--description` / `--body`: inline markdown body
-- `--priority` / `-p`: `none`, `urgent`, `high`, `medium`, `low`, or `0-4`
-
-## Workflow
-
-1. Write the issue description to a temp markdown file.
-2. Run the command above with the correct team key.
-3. Report the created issue identifier and URL from the command output.
-4. If you are going to work on the new issue (the user asked to create it for the work at hand), name your tmux window after it: `grog tmux-name <IDENTIFIER>` (skip this for a follow-up issue filed while you keep working on another one).
-
-## Error Handling
-
-- If no team is specified and the team cannot be inferred, ask for the team key.
-- If the Linear token is missing, tell the user to declare the workspace in `.grog` and configure `~/.grog/config.json`.
+- No team or no title on the first line: return what is missing, create nothing.
+- Linear token missing: declare the workspace in `.grog` and configure `~/.grog/config.json`.
 EOF
 
 echo "  > /grog-create skill"
