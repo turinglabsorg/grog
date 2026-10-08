@@ -19,7 +19,7 @@ cd skill
 ./install.sh
 ```
 
-The installer copies the CLI to `~/.claude/tools/grog/`, installs its npm dependencies, and writes the skill definitions under `~/.claude/skills/`.
+The installer copies the CLI to `~/.claude/tools/grog/`, installs its npm dependencies, and writes the skills once under `~/.agents/skills/` (read by Codex and Hermes), linked from `~/.claude/skills/` for Claude Code and Grok. `skill/install-skills.sh` redoes just that step.
 
 ## Commands
 
