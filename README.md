@@ -39,6 +39,9 @@ grog tmux-name <issue-url|id|name> Name your tmux window after the issue (MTR-13
 grog up <port>                    Share localhost:<port> as a public https link until stopped
 grog up <port> --domain <host>    The same on a fixed host (demo.grooooog.space, alienwatch.buzz)
 grog serve                        Keep the sites in ~/.grog/sites.json online (site domains)
+grog notion search [query]        List the Notion pages and databases shared with the integration
+grog notion create ...            Write a Markdown file as a new Notion page or database row
+grog notion append|replace <page> Add to, or rewrite, a Notion page from a Markdown file
 grog contacts ...                 Manage the messaging address book
 ```
 
@@ -63,6 +66,20 @@ grog answer https://linear.app/workspace/issue/PROJ-123 /tmp/summary.md --image 
 The same entry points exist as skills: `/grog-solve`, `/grog-explore`, `/grog-review`, `/grog-answer`, `/grog-create`, `/grog-talk`, `/grog-tmux`, `/grog-up`.
 
 `grog tmux-name` renames only the window of the calling pane (`TMUX_PANE`), so several agents can share a session. Agents run it as soon as they start on an issue. Under Codex's shared app-server daemon the pane is not the caller's, and the command refuses; set `features.daemon_auto_start = false` or run Codex with `--no-daemon`.
+
+## Notion
+
+`grog notion` writes Markdown files to Notion through an internal integration. Every command names its workspace: `--workspace ACME`, or a `notion=ACME` line in the project's `.grog` file. There is no default, so a document cannot land in another workspace by accident. The token is read from hush as `ACME_NOTION_TOKEN` (or the hush name in `config.notion.ACME.tokenName`) and is never printed.
+
+```bash
+grog notion search --workspace ACME
+grog notion create --parent https://app.notion.com/p/<page-or-database> --title "Launch plan" \
+  --file plan.md --prop Status="In progress" --prop Type=Spec --icon 🚀 --workspace ACME
+grog notion replace https://app.notion.com/p/<page> --file plan.md --workspace ACME
+grog notion append https://app.notion.com/p/<page> --file notes.md --workspace ACME
+```
+
+Share the target page or database with the integration in Notion first (`•••` → Connections). Headings, paragraphs, bulleted, numbered and task lists (one nested level), tables, fenced code, quotes, GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) as callouts, dividers, external images, bold, italic, strikethrough, inline code and http(s) links are converted. `--prop Name=value` sets database properties (title, text, select, multi-select, status, number, checkbox, date, url, email, phone, relation) after checking them against the database schema. `replace` updates the title and properties before it deletes the old body, so a refused value leaves the page untouched. Argument errors stop before hush or the network.
 
 ## Public links
 

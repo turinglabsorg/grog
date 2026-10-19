@@ -12,6 +12,17 @@ import tls from "tls";
 import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
 import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
 import { createBoard, createSites, createStats, listenCountingProxy, rejectScan, track } from "./board.js";
+import {
+  NotionClient,
+  NotionError,
+  NotionUsageError,
+  buildProperties,
+  markdownToBlocks,
+  parseNotionArgs,
+  plainTitle,
+  richText,
+  titlePropertyName,
+} from "./notion.js";
 
 // Load config from ~/.grog/config.json (primary) with .env fallback
 const __filename = fileURLToPath(import.meta.url);
@@ -666,6 +677,146 @@ function handleTmuxName(args) {
     process.exit(1);
   }
   console.log(`tmux window renamed: ${name}`);
+}
+
+// ─────────────────────────────────────────────────────────
+// Notion (grog notion)
+// ─────────────────────────────────────────────────────────
+
+const NOTION_USAGE = [
+  "grog notion search [query] --workspace NAME",
+  "grog notion create --parent <page-or-database-link> --title \"Title\" --file doc.md [--prop Name=value ...] [--icon 📄] --workspace NAME",
+  "grog notion append <page-link> --file doc.md --workspace NAME",
+  "grog notion replace <page-link> --file doc.md [--title \"Title\"] [--prop Name=value ...] [--icon 📄] --workspace NAME",
+].join("\n         ");
+
+/**
+ * Which Notion workspace a command writes to: --workspace, else a notion=NAME line
+ * in the project's .grog file. There is no default, so one client's document can
+ * never land in another client's workspace by accident.
+ */
+function notionWorkspace(parsed) {
+  if (parsed.workspace) return parsed.workspace;
+  const grogFile = findGrogFile(process.cwd());
+  if (!grogFile) return null;
+  const match = readFileSync(grogFile, "utf-8").match(/^\s*notion\s*=\s*([A-Za-z][A-Za-z0-9_]*)\s*$/m);
+  return match ? match[1].toUpperCase() : null;
+}
+
+/** The hush secret holding a workspace's token: NAME_NOTION_TOKEN, or notion.NAME.tokenName in config. */
+function notionTokenName(workspace) {
+  const entry = (grogConfig.notion || {})[workspace];
+  const name = entry && typeof entry.tokenName === "string" ? entry.tokenName : `${workspace}_NOTION_TOKEN`;
+  return /^[A-Z_][A-Z0-9_]*$/.test(name) ? name : null;
+}
+
+function readNotionMarkdown(file) {
+  let stat;
+  try {
+    stat = statSync(file);
+  } catch (err) {
+    throw new NotionUsageError(`could not read ${file}: ${err.code || err.message}`);
+  }
+  if (!stat.isFile()) throw new NotionUsageError(`${file} is not a file`);
+  if (stat.size > 2 * 1024 * 1024) throw new NotionUsageError(`${file} is larger than 2 MB`);
+  const text = readFileSync(file, "utf-8");
+  if (!text.trim()) throw new NotionUsageError(`${file} is empty`);
+  return text;
+}
+
+function printableTitle(text) {
+  return String(text || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim() || "(untitled)";
+}
+
+/** Title and --prop values for a page under `parent` (a database or a page). */
+function notionProperties(parent, title, props) {
+  if (parent.object === "database") {
+    const properties = buildProperties(parent.properties || {}, props);
+    if (title) properties[titlePropertyName(parent.properties) || "Name"] = { title: richText(title) };
+    return properties;
+  }
+  if (props.length) throw new NotionUsageError("--prop only works on pages inside a database");
+  return title ? { title: { title: richText(title) } } : {};
+}
+
+async function handleNotion(args) {
+  let parsed;
+  let blocks = [];
+  try {
+    parsed = parseNotionArgs(args);
+    if (parsed.file) blocks = markdownToBlocks(readNotionMarkdown(parsed.file));
+  } catch (err) {
+    if (!(err instanceof NotionUsageError)) throw err;
+    console.error(`! error: ${err.message}`);
+    console.error(`  usage: ${NOTION_USAGE}`);
+    process.exit(1);
+  }
+
+  const workspace = notionWorkspace(parsed);
+  if (!workspace) {
+    console.error("! error: no Notion workspace: pass --workspace NAME or add a notion=NAME line to the project's .grog file");
+    console.error("  the token is read from hush as NAME_NOTION_TOKEN");
+    process.exit(1);
+  }
+  const tokenName = notionTokenName(workspace);
+  const token = tokenName ? tokenFromHush(tokenName) : "";
+  if (!token) {
+    console.error(`! error: no Notion token for workspace ${workspace}: store it in hush as ${tokenName || `${workspace}_NOTION_TOKEN`}`);
+    process.exit(1);
+  }
+
+  const client = new NotionClient({ token });
+  try {
+    if (parsed.sub === "search") {
+      const results = await client.search(parsed.query);
+      if (!results.length) console.log("  (nothing shared with this integration matches)");
+      for (const item of results) {
+        console.log(`  ${item.object.padEnd(8)} ${printableTitle(plainTitle(item))}  ${item.url || item.id}`);
+      }
+      return;
+    }
+
+    if (parsed.sub === "create") {
+      const parent = await client.retrieve(parsed.parentId);
+      const properties = notionProperties(parent, parsed.title, parsed.props);
+      const parentRef = parent.object === "database" ? { database_id: parent.id } : { page_id: parent.id };
+      const page = await client.createPage({ parent: parentRef, properties, blocks, icon: parsed.icon });
+      console.log(`> created "${printableTitle(parsed.title)}" (${blocks.length} blocks) in "${printableTitle(plainTitle(parent))}"`);
+      console.log(`  ${page.url || page.id}`);
+      return;
+    }
+
+    const page = await client.retrieve(parsed.pageId);
+    if (page.object !== "page") throw new NotionUsageError(`${parsed.sub} needs a page, not a database`);
+
+    if (parsed.sub === "append") {
+      const written = await client.appendChildren(page.id, blocks);
+      console.log(`> appended ${written} blocks to "${printableTitle(plainTitle(page))}"`);
+      console.log(`  ${page.url || page.id}`);
+      return;
+    }
+
+    // replace: settle title and properties first, so a refused value leaves the body untouched.
+    let properties = {};
+    if (parsed.title || parsed.props.length) {
+      const parent = page.parent?.type === "database_id"
+        ? await client.request("GET", `/databases/${page.parent.database_id}`)
+        : { object: "page" };
+      properties = notionProperties(parent, parsed.title, parsed.props);
+    }
+    await client.updatePage(page.id, { properties, icon: parsed.icon });
+    const { removed, written } = await client.replaceChildren(page.id, blocks);
+    const title = parsed.title || plainTitle(page);
+    console.log(`> replaced the body of "${printableTitle(title)}": ${removed} blocks removed, ${written} written`);
+    console.log(`  ${page.url || page.id}`);
+  } catch (err) {
+    if (err instanceof NotionUsageError || err instanceof NotionError) {
+      console.error(`! error: ${err.message}`);
+    } else {
+      console.error(`! error: ${client.scrub(err?.message || err)}`);
+    }
+    process.exit(1);
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -5097,6 +5248,7 @@ const COMMAND_HELP = {
   done: "grog done <linear-issue-url-or-identifier>",
   cancel: "grog cancel <linear-issue-url-or-identifier>",
   up: "grog up <port> [--domain <host>]",
+  notion: NOTION_USAGE,
   serve: "grog serve   (keeps the sites in ~/.grog/sites.json online, and a {board:true} host shows the live page)",
   "tmux-name": "grog tmux-name <linear-issue-url-or-identifier|github-issue-or-pr-url|name>",
   contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID]",
@@ -5143,6 +5295,9 @@ function printHelp() {
   console.log("    grog up <port>                share localhost:<port> as a public https link (Ctrl-C closes it)");
   console.log("    grog up <port> --domain <host> the same, on a fixed host (alienwatch.buzz, demo.grooooog.space)");
   console.log("    grog serve                    keep ~/.grog/sites.json online; a {\"board\":true} host is the live page");
+  console.log("    grog notion search [query]    list the Notion pages and databases shared with the integration");
+  console.log("    grog notion create ...        write a Markdown file as a new Notion page (or database row)");
+  console.log("    grog notion append|replace    add to, or rewrite, an existing Notion page from a Markdown file");
   console.log("    grog contacts list            list saved messaging contacts");
   console.log("    grog talk                     connect a messaging bridge for remote interaction");
   console.log("    grog recv                     wait for the next inbound message");
@@ -5173,6 +5328,11 @@ function printHelp() {
   console.log("    grog start https://linear.app/workspace/issue/PROJ-123");
   console.log("    grog done https://linear.app/workspace/issue/PROJ-123");
   console.log("    grog cancel https://linear.app/workspace/issue/PROJ-123");
+  console.log("");
+  console.log("  notion examples (token from hush as <WORKSPACE>_NOTION_TOKEN):");
+  console.log("    grog notion search --workspace ACME");
+  console.log("    grog notion create --parent https://app.notion.com/p/<database> --title \"Launch plan\" --file plan.md --prop Type=Spec --workspace ACME");
+  console.log("    grog notion replace https://app.notion.com/p/<page> --file plan.md --workspace ACME");
   console.log("");
   console.log("  jam examples:");
   console.log("    grog jam https://jam.dev/c/abcd-1234");
@@ -5335,6 +5495,10 @@ async function main() {
 
     case "up":
       await handleUp(process.argv.slice(3));
+      break;
+
+    case "notion":
+      await handleNotion(process.argv.slice(3));
       break;
 
     case "serve":

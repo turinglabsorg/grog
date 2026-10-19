@@ -32,6 +32,10 @@ Renames the tmux window you are working in after the issue (`MTR-1334`, `repo#12
 
 Shares a local dev server as a public HTTPS link, `https://<code>.grooooog.space`, that anyone with the link can open from any device, until the command stops. The machine accepts no inbound connection and only that port is reachable; the relay side lives in `tunnel/`.
 
+### `/grog-notion <page-or-database> <file>`
+
+Writes a Markdown file to Notion as a new page, a database row with its properties, or the new body of an existing page. The workspace is always named and its token is read from hush, never printed.
+
 ### `/grog-talk`
 
 Opens a bidirectional Telegram, WhatsApp, or Discord bridge. Messages received from the selected channel are processed as if they were typed in the terminal, and responses are sent back through the same channel.
