@@ -483,7 +483,7 @@ argument-hint: <page-or-database-link> <markdown-file>
 
 # GROG notion - Markdown to Notion
 
-Write the document as a Markdown file first, then send the file. Never pass the body inline.
+Write the document as a Markdown file first, then send the file. Never pass the body inline. In a container `grog` runs on the host, which cannot see the container's `/tmp`: write the file under the home or project folder.
 
 ## Workspace and token
 
