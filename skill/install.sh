@@ -74,7 +74,7 @@ echo "  > $GROG_CONFIG_DIR"
 
 echo ""
 echo -e "${BOLD}[2/8]${NC} copying files..."
-for file in index.js board.js discord-client.js github-issues.js package.json package-lock.json; do
+for file in index.js board.js discord-client.js github-issues.js notion.js package.json package-lock.json; do
   cp "$SCRIPT_DIR/$file" "$TOOLS_DIR/"
 done
 echo "  > index.js, its modules, package.json and package-lock.json"

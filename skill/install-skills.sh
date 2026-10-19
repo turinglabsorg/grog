@@ -9,7 +9,7 @@ set -e
 SKILLS_DIR="${GROG_SKILLS_DIR:-$HOME/.agents/skills}"
 CLAUDE_SKILLS_DIR="${CLAUDE_HOME:-$HOME/.claude}/skills"
 CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-SKILLS="grog-solve grog-explore grog-review grog-answer grog-create grog-talk grog-tmux grog-up"
+SKILLS="grog-solve grog-explore grog-review grog-answer grog-create grog-talk grog-tmux grog-up grog-notion"
 
 for skill in $SKILLS; do
   [ -L "$SKILLS_DIR/$skill" ] && rm "$SKILLS_DIR/$skill"
@@ -471,6 +471,50 @@ grog tmux-name <linear-issue-url-or-id | github-issue-or-pr-url>
 - Do not call `tmux` yourself and do not write scripts for this.
 EOF
 echo "  > /grog-tmux skill"
+
+# Skill 6c: /grog-notion - write Markdown documents to Notion
+cat > "$SKILLS_DIR/grog-notion/SKILL.md" << 'EOF'
+---
+name: grog-notion
+description: Write a document to Notion with grog. Use when the user asks to put, publish, write, copy or update a document, plan, spec or notes in Notion ("mettilo su Notion", "pubblicalo in Notion", "aggiorna la pagina Notion"), or gives a notion.so / app.notion.com link to write to.
+allowed-tools: Bash, Read, Write
+argument-hint: <page-or-database-link> <markdown-file>
+---
+
+# GROG notion - Markdown to Notion
+
+Write the document as a Markdown file first, then send the file. Never pass the body inline.
+
+## Workspace and token
+
+Every command names its workspace: `--workspace NAME`, or a `notion=NAME` line in the project's `.grog` file. The token is read from hush as `NAME_NOTION_TOKEN`; grog never prints it. A workspace belongs to one client: never write one client's document into another client's workspace. If hush has no `NAME_NOTION_TOKEN`, ask the user to send the token through hush (hush-ingest), never as plain text.
+
+## Commands
+
+```bash
+grog notion search [query] --workspace NAME            # pages and databases shared with the integration
+grog notion create --parent <page-or-database-link> --title "Title" --file doc.md \
+  [--prop Name=value ...] [--icon 🚀] --workspace NAME  # new page, or new row in a database
+grog notion replace <page-link> --file doc.md [--title "Title"] [--prop Name=value ...] --workspace NAME
+grog notion append <page-link> --file doc.md --workspace NAME
+```
+
+1. Run `search` to find the parent. Pick the database or page that fits (a Docs database for documents); when nothing clearly fits, ask the user.
+2. In a database, set the properties its schema has (`--prop Type=Spec --prop Status="In progress"`). grog checks names and status options against the schema before writing.
+3. Updating a document you created earlier: `replace` the same page instead of creating a second one.
+4. Give the user the page link grog prints.
+
+## What converts
+
+Headings (`#`, `##`, `###`; deeper becomes `###`), paragraphs, bulleted, numbered and task lists with one nested level, pipe tables (first row is the header), fenced code with its language, quotes, GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) as callouts, `---` dividers, `![alt](https://...)` images, **bold**, *italic*, ~~strike~~, `code` and http(s) links. Relative links stay plain text. There is no H1 in the body: the page title is `--title`.
+
+## Errors
+
+- `object_not_found` or `restricted_resource`: the page or database is not shared with the integration. Ask the user to add the integration in Notion (`•••` → Connections) on that page.
+- `no Notion token for workspace NAME`: the hush secret is missing.
+- Call `grog`, not `node .../grog/index.js`: in a container `grog` runs on the host.
+EOF
+echo "  > /grog-notion skill"
 
 # Skill 6: /grog-talk - messaging bridge for remote interaction
 cat > "$SKILLS_DIR/grog-talk/SKILL.md" << 'EOF'
