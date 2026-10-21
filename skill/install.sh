@@ -28,6 +28,34 @@ echo ""
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+copy_runtime() {
+  for file in index.js board.js discord-client.js github-issues.js notion.js sms.js package.json package-lock.json; do
+    cp "$SCRIPT_DIR/$file" "$1/"
+  done
+}
+
+if [ "${1:-}" = "--runtime-only" ]; then
+  [ "$#" -eq 1 ] || { echo "Usage: install.sh --runtime-only" >&2; exit 1; }
+  updated=0
+  for runtime in "$HOME/.claude/tools/grog" "$HOME/.codex/tools/grog"; do
+    [ -f "$runtime/index.js" ] || continue
+    if [ ! -d "$runtime/node_modules" ] || ! cmp -s "$SCRIPT_DIR/package-lock.json" "$runtime/package-lock.json"; then
+      echo "Existing dependencies differ or are missing; run the full installer first." >&2
+      exit 1
+    fi
+  done
+  for runtime in "$HOME/.claude/tools/grog" "$HOME/.codex/tools/grog"; do
+    [ -f "$runtime/index.js" ] || continue
+    copy_runtime "$runtime"
+    updated=$((updated + 1))
+  done
+  [ "$updated" -gt 0 ] || { echo "No installed grog runtime; run the full installer first." >&2; exit 1; }
+  bash "$SCRIPT_DIR/install-skills.sh"
+  echo "Updated $updated grog runtime(s) and regenerated skills."
+  exit 0
+fi
+[ "$#" -eq 0 ] || { echo "Usage: install.sh [--runtime-only]" >&2; exit 1; }
+
 # Target directories
 TOOLS_DIR="$HOME/.claude/tools/grog"
 SKILLS_DIR="$HOME/.agents/skills"
@@ -74,9 +102,7 @@ echo "  > $GROG_CONFIG_DIR"
 
 echo ""
 echo -e "${BOLD}[2/8]${NC} copying files..."
-for file in index.js board.js discord-client.js github-issues.js notion.js package.json package-lock.json; do
-  cp "$SCRIPT_DIR/$file" "$TOOLS_DIR/"
-done
+copy_runtime "$TOOLS_DIR"
 echo "  > index.js, its modules, package.json and package-lock.json"
 
 echo ""

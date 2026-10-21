@@ -1,8 +1,8 @@
 # Grog
 
-Grog is a local CLI and Claude/Codex skill for GitHub issues, Linear issues, pull requests, Jam.dev reports, and Telegram, WhatsApp, and Discord messaging.
+Grog is a local CLI and Claude/Codex skill for GitHub issues, Linear issues, pull requests, Jam.dev reports, and Telegram, WhatsApp, Discord, and SMS messaging.
 
-It runs on your machine. Credentials stay in `~/.grog/config.json`. The CLI talks to GitHub, Linear, and the messaging APIs directly.
+It runs on your machine. Existing integrations use `~/.grog/config.json`; SMS and Notion credentials are injected by name from hush. The CLI talks to GitHub, Linear, and the messaging APIs directly.
 
 ## Layout
 
@@ -95,10 +95,10 @@ Our own domains (like `alienwatch.buzz`) are served persistently, never by a one
 ## Messaging
 
 ```text
-grog talk [--telegram|--whatsapp|--discord]
-grog recv [--telegram|--whatsapp|--discord]
-grog send [--telegram|--whatsapp|--discord] [--to contact] <message-or-file>
-grog notify [--telegram|--whatsapp|--discord] [--to contact] <message>
+grog talk [--telegram|--whatsapp|--discord|--sms]
+grog recv [--telegram|--whatsapp|--discord|--sms]
+grog send [--telegram|--whatsapp|--discord|--sms] [--to contact] <message-or-file>
+grog notify [--telegram|--whatsapp|--discord|--sms] [--to contact] <message>
 grog telegram-send, grog telegram-recv, grog telegram-send-image, grog telegram-send-document
 grog whatsapp-talk, grog whatsapp-recv, grog whatsapp-send, grog whatsapp-send-image, grog whatsapp-notify
 grog discord-talk, grog discord-channels, grog discord-read, grog discord-recv, grog discord-send
@@ -109,6 +109,42 @@ Channel selection is the CLI flag, then `GROG_CHANNEL`, then `channel` in `~/.gr
 Inline text is for single-line messages. Multiline messages go in a UTF-8 file, and the command receives the file path. Discord `talk`, `read`, and `recv` accept `--all` for every server the bot can see. Receive uses the Discord Gateway and remembers the source channel for the next reply. `discordChannelId` is an optional default.
 
 Telegram attachments land in `/tmp/grog-telegram-files`. Discord attachments land in `/tmp/grog-discord-files`.
+
+## SMS through Zernio
+
+Store the Zernio API key in hush as `ZERNIO_API_KEY`. SMS commands obtain it through `hush run --redact`; no key belongs in command arguments or the address book. Optional configuration contains only `zernio.smsTokenName` (an alternate hush name) and `zernio.smsNumber` (a default owned number).
+
+```bash
+grog sms-numbers --json
+grog sms-enable --number +31612345678
+grog sms-talk --number +31612345678
+grog sms-read --number +31612345678 --sender Example --limit 20
+grog sms-recv --number +31612345678 --timeout 60
+grog contacts save example --sms +31687654321
+grog send --sms --number +31612345678 --to example "Message"
+```
+
+The numbers above are placeholders. Select an existing owned number explicitly with `--number` or the configured default. `sms-enable` enables SMS on that exact owned number; Grog never purchases a number, enrolls it in registration, or enables it implicitly. Capability, country restrictions and registration requirements come from Zernio. Receiving a particular provider's verification SMS must be tested on the actual number; `smsCapable` alone does not prove it works.
+
+`talk`, `recv`, `send` and `notify` accept `--sms` with `--number`; explicit `sms-*` commands do not change the default channel. `sms-talk` anchors future receives without sending a welcome message. `sms-read` is non-consuming history; `sms-recv` returns one unseen incoming message and exits with status 2 on timeout (1 on error). Reads support `--sender`, case-insensitive `--contains` and `--since ISO`; receive defaults to 60 seconds and accepts 0–300. JSON is the default output. Text messages are supported; attachments/MMS are not.
+
+### Verification codes without exposing them
+
+Use the protected consumer for verification SMS. Never run ordinary history/receive into agent output when it may contain a password or code. Record a fresh ISO timestamp immediately before requesting the code in the provider UI, then pass it below:
+
+```bash
+grog sms-recv --number +31612345678 --since REQUESTED_AT_ISO \
+  --contains Example --timeout 60 --otp-env LOGIN_OTP -- \
+  node /absolute/path/to/provider-code-consumer.mjs
+```
+
+The timestamp must be within the last five minutes. A sender or text filter is mandatory. Grog accepts exactly one distinct six-digit code from a fresh incoming message, marks the message consumed, and injects the code only into the child environment. The child receives neither the Zernio key nor `BW_SESSION`. No shell interprets its arguments. Output is buffered and the code is redacted even across output chunks; keep the consumer silent about input values and never write them to files, screenshots or logs. Consumer execution is limited to 120 seconds and 2 MiB of output. A consumer failure consumes the message: inspect the provider state and request a new code rather than replaying it.
+
+Receive state under `~/.grog/sms-state/` contains only a checkpoint and up to 2,000 consumed message IDs per number/account, with private file permissions and one active receiver per scope. It contains no message bodies, credentials or codes. `sms-talk` starts a new checkpoint; use explicit `--since` for history or verification. Filtering a message does not consume it.
+
+SMS send accepts single-line inline text or a UTF-8 file, never attachments. Supply `--idempotency-key KEY` when coordinating a send across retries; Grog otherwise generates and returns a key. It sends once and reports the provider's submission status, which is not a delivery receipt. Do not blindly retry an ambiguous network failure. Carrier text/Unicode limits and destination restrictions still apply.
+
+For an existing installation with unchanged dependencies, `bash skill/install.sh --runtime-only` updates installed runtime modules and regenerates the agent skills without prompting for credentials or installing packages.
 
 ## Configuration
 

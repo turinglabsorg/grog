@@ -18,17 +18,17 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 - `tunnel/renew.sh` gets the relay's certificates with a DNS-01 challenge from the machine that holds the DNS tokens in hush; the relay only receives certificates and keys. Each site line in `~/.config/grog-relay/sites` may name its DNS (`digitalocean`, the default, or `cloudflare`). A failing site is reported and must not stop the others. The installed copy at `~/.config/grog-relay/renew.sh` runs weekly from launchd (`space.grooooog.relay-renew`): keep it identical to the repository's.
 - `grog tmux-name <issue-url|id|name>` renames the tmux window the agent works in (the one holding `TMUX_PANE`): a Linear identifier as is, a GitHub issue or PR as `repo#123`, other text trimmed to 40 printable characters. It runs `tmux` without a shell and fails with a message outside tmux. Use it when the agent starts working on an issue, right after creating the issue it is about to work on, and when the user asks to name the tmux window, tab or session after the issue. Under Codex's shared app-server daemon TMUX_PANE belongs to whichever window started the daemon, so the command refuses there rather than rename another agent's tab; Codex needs `--no-daemon` or `features.daemon_auto_start = false`.
 - `grog notion search|create|append|replace` writes Markdown to Notion (`skill/notion.js`, REST API version `2022-06-28`). The workspace is always explicit (`--workspace NAME` or `notion=NAME` in the project's `.grog` file) and the token comes from hush as `NAME_NOTION_TOKEN` (or `config.notion.NAME.tokenName`), so one client's document cannot reach another client's workspace. Keep these properties: argument errors refused before hush or the network; the token appears only in the Authorization header and every API error is scrubbed of it; `replace` writes title and properties before deleting the old body; requests stay within Notion's limits (100 blocks, under 1000 elements, 2000 characters per text object, two nesting levels). `GROG_NOTION_API` points the client at a stand-in API; `skill/notion.test.js` uses it with a stand-in `hush`.
-- `grog contacts ...` manages Telegram, WhatsApp, and Discord address book entries.
+- `grog contacts ...` manages Telegram, WhatsApp, Discord, and SMS address book entries.
 - Telegram uploads (`telegram-send-image`, `telegram-send-document`) go through `fetch` with `FormData`, never a shell or curl: a caption is text whatever it holds, and nothing printed may contain the bot token (`hideTelegramToken`). `GROG_TELEGRAM_API` points the client at a stand-in API; `skill/telegram-upload.test.js` uses it.
 
 ## Messaging Bridge
 
 The messaging bridge supports channel-specific and generic commands:
 
-- `grog talk [--telegram|--whatsapp|--discord]`
-- `grog recv [--telegram|--whatsapp|--discord]`
-- `grog send [--telegram|--whatsapp|--discord] [--to contact] <message-or-file>`
-- `grog notify [--telegram|--whatsapp|--discord] [--to contact] <message>`
+- `grog talk [--telegram|--whatsapp|--discord|--sms]`
+- `grog recv [--telegram|--whatsapp|--discord|--sms]`
+- `grog send [--telegram|--whatsapp|--discord|--sms] [--to contact] <message-or-file>`
+- `grog notify [--telegram|--whatsapp|--discord|--sms] [--to contact] <message>`
 - `grog telegram-send`, `grog telegram-recv`, `grog telegram-send-image`
 - `grog whatsapp-talk`, `grog whatsapp-recv`, `grog whatsapp-send`, `grog whatsapp-send-image`, `grog whatsapp-notify`
 - `grog discord-talk`, `grog discord-channels`, `grog discord-read`, `grog discord-recv`, `grog discord-send`
@@ -38,6 +38,14 @@ Discord `talk`, `read`, and `recv` accept `--all` to cover every server the bot 
 The Gateway client requests only `GUILDS`, `GUILD_MESSAGES`, and `MESSAGE_CONTENT`. It persists the session ID, resume URL, and sequence in `/tmp/grog-discord-state.json` with mode `0600`, terminates the socket after each CLI receive, and resumes on the next call to avoid consuming a new Identify session for every message. Never persist the bot token in the state file.
 
 Channel selection precedence is CLI flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
+
+## SMS
+
+`skill/sms.js` owns Zernio SMS; all SMS use this CLI boundary. `sms-numbers`, `sms-enable`, `sms-talk`, `sms-read`, `sms-recv`, and `sms-send` have generic `--sms` routing. Contacts use `addressBook.ALIAS.sms`; optional non-secret defaults are `zernio.smsNumber` and `zernio.smsTokenName`. Credentials come from hush (`ZERNIO_API_KEY` by default), never a new plaintext config field. `GROG_ZERNIO_API` only permits a loopback HTTP test server. Requests use the exact owned phone and matching active `platform=sms` account; reject partial provider results and incomplete pagination. Do not fetch message attachments or arbitrary message URLs.
+
+`--otp-env NAME -- COMMAND` requires a fresh `--since` and sender/text filter. Only fresh incoming messages with one distinct six-digit code may launch the child. No shell, API token or Bitwarden session is passed; buffer and redact output across chunks. State stores only a checkpoint and consumed IDs under `~/.grog/sms-state/` (0600), one locked receiver per number/account. Failed consumers still consume their message. Never log OTPs or message bodies in verification evidence.
+
+Enable only explicitly requested existing numbers; never purchase or register a line implicitly. SMS submission is not delivery. Sends use idempotency keys and must not auto-retry ambiguous failures. `skill/sms.test.js` exercises the actual CLI against a local provider, including scope, pagination, hush injection, private consumption, replay and send refusal. `bash skill/install.sh --runtime-only` updates existing runtimes and generated skills without credential prompts or dependency installation.
 
 ## Outgoing Payload Safety
 
@@ -102,7 +110,7 @@ Important keys:
 
 - Keep `skill/index.js` aligned with the installed runtime when local fixes have been made in `~/.codex/tools/grog/index.js`.
 - After CLI changes, run `node --check skill/index.js`.
-- Run `npm test --prefix skill` after Discord client changes.
+- Run `npm test --prefix skill` after messaging changes.
 - `skill/linear-update.test.js` covers `grog update`: every case asserts the refusal happens before the network, because a malformed edit that reaches Linear has already changed a client's tracker.
 - Runtime-test messaging changes against the real bridge when credentials are available.
 - Do not print or commit tokens, chat IDs, or contact phone numbers except placeholder examples.

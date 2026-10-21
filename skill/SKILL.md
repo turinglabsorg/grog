@@ -38,7 +38,7 @@ Writes a Markdown file to Notion as a new page, a database row with its properti
 
 ### `/grog-talk`
 
-Opens a bidirectional Telegram, WhatsApp, or Discord bridge. Messages received from the selected channel are processed as if they were typed in the terminal, and responses are sent back through the same channel.
+Opens a bidirectional Telegram, WhatsApp, Discord, or SMS bridge. Messages received from the selected channel are processed as if they were typed in the terminal, and responses are sent back through the same channel.
 
 ## Installation
 
@@ -210,3 +210,7 @@ node ~/.claude/tools/grog/index.js jam https://jam.dev/c/<id> --telegram
 ```
 
 Use `--json` for structured output and `--save /path/to/file` to write the summary or JSON to disk.
+
+## SMS access
+
+Use the installed `grog-talk` skill for Zernio SMS. `grog sms-numbers` discovers owned lines; all SMS actions stay inside grog. The API key comes from hush as `ZERNIO_API_KEY`. `grog sms-recv --otp-env LOGIN_OTP --since REQUESTED_AT_ISO --contains PROVIDER --number OWNED_NUMBER -- COMMAND` injects a fresh six-digit verification code into a child without exposing it to the agent. See [README.md](../README.md#sms-through-zernio) for setup, limits and commands.

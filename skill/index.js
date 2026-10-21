@@ -10,6 +10,7 @@ import http from "http";
 import net from "net";
 import tls from "tls";
 import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
+import { handleSms, smsPhone, SMS_HELP } from "./sms.js";
 import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
 import { createBoard, createSites, createStats, listenCountingProxy, rejectScan, track } from "./board.js";
 import {
@@ -77,7 +78,7 @@ const ZERNIO_BASE = "https://zernio.com/api/v1";
 const WHATSAPP_STATE_FILE = "/tmp/grog-whatsapp-state.json";
 
 // Which channel the generic talk/recv/send/notify commands use.
-// Precedence: --whatsapp/--telegram/--discord flag (handled in main) > GROG_CHANNEL env >
+// Precedence: --whatsapp/--telegram/--discord/--sms flag (handled in main) > GROG_CHANNEL env >
 // config.channel > "telegram" (backward compatible default).
 const GROG_CHANNEL = (
   process.env.GROG_CHANNEL ||
@@ -112,6 +113,7 @@ function getContactChannel(contact, channel) {
   if (channel === "whatsapp") return contact.whatsapp || contact.whatsappPhone || contact.phone || null;
   if (channel === "telegram") return contact.telegram || contact.telegramChatId || contact.chatId || null;
   if (channel === "discord") return contact.discord || contact.discordChannelId || null;
+  if (channel === "sms") return contact.sms || null;
   return null;
 }
 
@@ -231,7 +233,10 @@ function parseContactFields(args) {
       return value;
     };
 
-    if (arg === "--name") fields.name = readValue(arg);
+    if (arg === "--sms" || arg.startsWith("--sms=")) {
+      try { fields.sms = smsPhone(arg === "--sms" ? readValue(arg) : arg.slice(6)); }
+      catch (error) { console.error(`! error: ${error.message}`); process.exit(1); }
+    } else if (arg === "--name") fields.name = readValue(arg);
     else if (arg.startsWith("--name=")) fields.name = arg.slice("--name=".length);
     else if (arg === "--whatsapp" || arg === "--wa" || arg === "--phone") {
       fields.whatsapp = normalizePhone(readValue(arg));
@@ -270,9 +275,11 @@ function printContact(alias, contact) {
   const whatsapp = getContactChannel(contact, "whatsapp");
   const telegram = getContactChannel(contact, "telegram");
   const discord = getContactChannel(contact, "discord");
+  const sms = getContactChannel(contact, "sms");
   if (whatsapp) parts.push(`whatsapp=${normalizePhone(whatsapp)}`);
   if (telegram) parts.push(`telegram=${telegram}`);
   if (discord) parts.push(`discord=${discord}`);
+  if (sms) parts.push(`sms=${sms}`);
   const name = contact?.name ? ` (${contact.name})` : "";
   console.log(`- ${alias}${name}: ${parts.join(", ") || "(no channels)"}`);
 }
@@ -5222,13 +5229,34 @@ async function handleWhatsappNotify(args) {
 function resolveChannelAndArgs(rawArgs) {
   let channel = GROG_CHANNEL;
   const rest = [];
-  for (const a of rawArgs) {
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
+    if (a === "--") { rest.push(...rawArgs.slice(i)); break; }
     if (a === "--whatsapp" || a === "--wa") channel = "whatsapp";
     else if (a === "--telegram" || a === "--tg") channel = "telegram";
     else if (a === "--discord" || a === "--dc") channel = "discord";
+    else if (a === "--sms") channel = "sms";
     else rest.push(a);
   }
   return { channel, rest };
+}
+
+async function handleSmsCommand(command, args) {
+  try {
+    process.exitCode = await handleSms(command, args, {
+      config: grogConfig, cliPath: __filename, readMessage: readMessageFromArgs,
+      resolveContact: (value) => {
+        const match = findAddressBookContact(value);
+        if (!match) return value;
+        const destination = getContactChannel(match.contact, "sms");
+        if (!destination) throw new Error(`Contact "${match.key}" has no SMS destination`);
+        return destination;
+      },
+    });
+  } catch (error) {
+    console.error(`! error: ${error.message}`);
+    process.exitCode = 1;
+  }
 }
 
 function isHelpToken(value) {
@@ -5236,6 +5264,7 @@ function isHelpToken(value) {
 }
 
 const COMMAND_HELP = {
+  ...SMS_HELP,
   help: "grog help",
   solve: "grog solve <github-or-linear-issue-url>",
   explore: "grog explore <github-repo-or-project-url|linear-url>",
@@ -5251,11 +5280,11 @@ const COMMAND_HELP = {
   notion: NOTION_USAGE,
   serve: "grog serve   (keeps the sites in ~/.grog/sites.json online, and a {board:true} host shows the live page)",
   "tmux-name": "grog tmux-name <linear-issue-url-or-identifier|github-issue-or-pr-url|name>",
-  contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID]",
-  talk: "grog talk [--whatsapp|--telegram|--discord] [--all]",
-  recv: "grog recv [--whatsapp|--telegram|--discord] [--all]",
-  send: "grog send [--whatsapp|--telegram|--discord] [--to contact] <message-or-file-path>",
-  notify: "grog notify [--whatsapp|--telegram|--discord] [--to contact] <message>",
+  contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID] [--sms +31...]",
+  talk: "grog talk [--whatsapp|--telegram|--discord|--sms] [--number NUMBER] [--all]",
+  recv: "grog recv [--whatsapp|--telegram|--discord|--sms] [--number NUMBER] [--all]",
+  send: "grog send [--whatsapp|--telegram|--discord|--sms] [--number NUMBER] [--to contact] <message-or-file-path>",
+  notify: "grog notify [--whatsapp|--telegram|--discord|--sms] [--number NUMBER] [--to contact] <message>",
   prompt: "grog prompt <message>",
   "telegram-send": "grog telegram-send [--to contact] <message-or-file-path>",
   "telegram-recv": "grog telegram-recv",
@@ -5306,6 +5335,9 @@ function printHelp() {
   console.log("    grog telegram-send --to me \"Message\"");
   console.log("    grog telegram-send-document --to me /tmp/file.html [caption]");
   console.log("    grog telegram-send-image --to me /tmp/shot.png [caption]");
+  console.log("    grog sms-numbers              list owned Zernio SMS numbers and capabilities");
+  console.log("    grog sms-read --number NUMBER read SMS from an explicitly selected owned number");
+  console.log("    grog sms-recv --help          receive SMS or inject a fresh code into a child process");
   console.log("    grog discord-read             read recent Discord messages and attachments");
   console.log("    grog discord-channels         list every discovered Discord server and channel");
   console.log("");
@@ -5345,6 +5377,8 @@ function printHelp() {
   console.log("    grog whatsapp-send-image --to me /tmp/screenshot.png \"Caption\"");
   console.log("    grog telegram-send --to me \"Message\"");
   console.log("    grog telegram-send-document --to me /tmp/export.csv \"Optional caption\"");
+  console.log("    grog sms-talk --number +31612345678");
+  console.log("    grog send --sms --number +31612345678 --to me \"Message\"");
   console.log("    grog discord-channels");
   console.log("    grog discord-read --all --limit 20");
   console.log("    grog discord-recv --all");
@@ -5380,7 +5414,8 @@ async function main() {
 
   const command = args[0];
   const url = args[1];
-  if (args.slice(1).some((value) => value === "--help" || value === "-h")) {
+  const optionEnd = args.indexOf("--");
+  if (args.slice(1, optionEnd === -1 ? undefined : optionEnd).some((value) => value === "--help" || value === "-h")) {
     printCommandHelp(command);
     process.exit(0);
   }
@@ -5505,9 +5540,19 @@ async function main() {
       await handleServe();
       break;
 
+    case "sms-numbers":
+    case "sms-enable":
+    case "sms-talk":
+    case "sms-read":
+    case "sms-recv":
+    case "sms-send":
+      await handleSmsCommand(command.slice(4), process.argv.slice(3));
+      break;
+
     case "talk": {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
-      if (channel === "whatsapp") await handleWhatsappTalk(rest);
+      if (channel === "sms") await handleSmsCommand("talk", rest);
+      else if (channel === "whatsapp") await handleWhatsappTalk(rest);
       else if (channel === "discord") await handleDiscordTalk(rest);
       else await handleTalk();
       break;
@@ -5516,7 +5561,8 @@ async function main() {
     // Generic channel-agnostic receive (routes by GROG_CHANNEL/config/flag)
     case "recv": {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
-      if (channel === "whatsapp") await handleWhatsappRecv();
+      if (channel === "sms") await handleSmsCommand("recv", rest);
+      else if (channel === "whatsapp") await handleWhatsappRecv();
       else if (channel === "discord") await handleDiscordRecv(rest);
       else await handleTelegramRecv();
       break;
@@ -5527,10 +5573,11 @@ async function main() {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
       if (rest.length === 0) {
         console.error("! error: missing message or file path");
-        console.log("  usage: grog send [--whatsapp|--telegram|--discord] [--to contact] <message-or-file-path>");
+        console.log("  usage: grog send [--whatsapp|--telegram|--discord|--sms] [--to contact] <message-or-file-path>");
         process.exit(1);
       }
-      if (channel === "whatsapp") await handleWhatsappSend(rest);
+      if (channel === "sms") await handleSmsCommand("send", rest);
+      else if (channel === "whatsapp") await handleWhatsappSend(rest);
       else if (channel === "discord") await handleDiscordSend(rest);
       else await handleTelegramSend(rest);
       break;
@@ -5624,10 +5671,11 @@ async function main() {
       const { channel, rest } = resolveChannelAndArgs(process.argv.slice(3));
       if (rest.length === 0) {
         console.error("! error: missing message");
-        console.log("  usage: grog notify [--whatsapp|--telegram|--discord] [--to contact] <message>");
+        console.log("  usage: grog notify [--whatsapp|--telegram|--discord|--sms] [--to contact] <message>");
         process.exit(1);
       }
-      if (channel === "whatsapp") await handleWhatsappNotify(rest);
+      if (channel === "sms") await handleSmsCommand("send", rest);
+      else if (channel === "whatsapp") await handleWhatsappNotify(rest);
       else if (channel === "discord") await handleDiscordSend(rest);
       else await handleNotify(rest);
       break;
