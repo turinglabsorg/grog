@@ -101,7 +101,7 @@ grog send [--telegram|--whatsapp|--discord|--sms] [--to contact] <message-or-fil
 grog notify [--telegram|--whatsapp|--discord|--sms] [--to contact] <message>
 grog telegram-send, grog telegram-recv, grog telegram-send-image, grog telegram-send-document
 grog whatsapp-talk, grog whatsapp-recv, grog whatsapp-send, grog whatsapp-send-image, grog whatsapp-notify
-grog discord-talk, grog discord-channels, grog discord-read, grog discord-recv, grog discord-send
+grog discord-talk, grog discord-channels, grog discord-read, grog discord-recv, grog discord-send, grog discord-send-image, grog discord-send-document
 ```
 
 Channel selection is the CLI flag, then `GROG_CHANNEL`, then `channel` in `~/.grog/config.json`, then Telegram.

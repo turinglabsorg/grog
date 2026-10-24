@@ -2,14 +2,14 @@
 
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
-import { basename, dirname, join, resolve, sep } from "path";
+import { basename, dirname, extname, join, resolve, sep } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync, realpathSync, createReadStream, watchFile } from "fs";
 import { homedir, hostname } from "os";
 import { execFileSync, spawn } from "child_process";
 import http from "http";
 import net from "net";
 import tls from "tls";
-import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
+import { DISCORD_API_BASE, DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
 import { handleSms, smsPhone, SMS_HELP } from "./sms.js";
 import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
 import { createBoard, createSites, createStats, listenCountingProxy, rejectScan, track } from "./board.js";
@@ -60,7 +60,20 @@ const TELEGRAM_API = process.env.GROG_TELEGRAM_API || "https://api.telegram.org"
 const DISCORD_BOT_TOKEN = grogConfig.discordBotToken || process.env.DISCORD_BOT_TOKEN;
 const DISCORD_CHANNEL_ID = grogConfig.discordChannelId || process.env.DISCORD_CHANNEL_ID;
 const DISCORD_STATE_FILE = "/tmp/grog-discord-state.json";
-const discordClient = new DiscordClient({ token: DISCORD_BOT_TOKEN });
+const discordClient = new DiscordClient({ token: DISCORD_BOT_TOKEN, apiBase: discordApiBase(process.env.GROG_DISCORD_API) });
+
+/** GROG_DISCORD_API may only point the client at a loopback test server. */
+function discordApiBase(override) {
+  if (!override) return DISCORD_API_BASE;
+  let url;
+  try { url = new URL(override); } catch { url = null; }
+  const loopback = url && url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (!loopback || url.username || url.password || url.search || url.hash) {
+    console.error("! error: GROG_DISCORD_API only permits a loopback test server");
+    process.exit(1);
+  }
+  return override.replace(/\/$/, "");
+}
 
 // Zernio (WhatsApp) bridge config — https://zernio.com/api
 const ZERNIO_API_KEY = grogConfig.zernio?.apiKey || process.env.ZERNIO_API_KEY;
@@ -4784,6 +4797,60 @@ async function handleDiscordSend(args) {
   console.log(`> sent to Discord${target ? ` (${target.label})` : ` (${channelId})`}`);
 }
 
+const DISCORD_IMAGE_TYPES = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+};
+
+/**
+ * Upload an image or any other file to a Discord channel with an optional caption.
+ * Usage: grog discord-send-image|discord-send-document [--channel ID|--to contact] <file-path> [caption]
+ */
+async function handleDiscordSendFile(args, kind) {
+  const command = kind === "image" ? "discord-send-image" : "discord-send-document";
+  const usage = `  usage: grog ${command} [--channel ID|--to contact] <${kind === "image" ? "image" : "file"}-path> [caption]`;
+  requireDiscordConfig();
+  const { to, rest: recipientRest } = parseRecipientArgs(args);
+  const { channelId: requestedChannelId, all, rest } = parseDiscordArgs(recipientRest);
+  if (all) {
+    console.error("! error: --all is only valid for Discord talk, read, and receive commands");
+    process.exit(1);
+  }
+  const filePath = rest[0];
+  const caption = rest.slice(1).join(" ");
+  if (!filePath) {
+    console.error(`! error: missing ${kind === "image" ? "image" : "file"} path`);
+    console.error(usage);
+    process.exit(1);
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    console.error(`! error: file not found: ${filePath}`);
+    process.exit(1);
+  }
+  const extension = extname(filePath).toLowerCase();
+  if (kind === "image" && !DISCORD_IMAGE_TYPES[extension]) {
+    console.error(`! error: not an image (png, jpg, gif, webp): ${filePath}`);
+    console.error("  send other files with grog discord-send-document");
+    process.exit(1);
+  }
+  if (caption.length > 2000) {
+    console.error("! error: the caption is longer than Discord's 2000 characters");
+    process.exit(1);
+  }
+  const { channelId, target } = resolveDiscordChannel(requestedChannelId, to);
+  try {
+    await discordClient.sendFile(channelId, {
+      data: readFileSync(filePath),
+      filename: basename(filePath),
+      contentType: DISCORD_IMAGE_TYPES[extension] || "application/octet-stream",
+      caption,
+    });
+    console.log(`> ${kind === "image" ? "image" : "document"} sent to Discord${target ? ` (${target.label})` : ` (${channelId})`}`);
+  } catch (err) {
+    console.error(`! error: failed to send ${kind === "image" ? "image" : "document"}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
 // ─────────────────────────────────────────────────────────
 // WhatsApp Bridge (via Zernio — https://zernio.com/api)
 // ─────────────────────────────────────────────────────────
@@ -5301,6 +5368,8 @@ const COMMAND_HELP = {
   "discord-servers": "grog discord-servers",
   "discord-recv": "grog discord-recv [--all]",
   "discord-send": "grog discord-send [--channel ID|--to contact] <message-or-file-path>",
+  "discord-send-image": "grog discord-send-image [--channel ID|--to contact] <image-path> [caption]",
+  "discord-send-document": "grog discord-send-document [--channel ID|--to contact] <file-path> [caption]",
 };
 
 function printHelp() {
@@ -5384,6 +5453,8 @@ function printHelp() {
   console.log("    grog discord-recv --all");
   console.log("    grog discord-read --channel 123456789012345678 --limit 20");
   console.log("    grog discord-send --channel 123456789012345678 \"Message\"");
+  console.log("    grog discord-send-image --channel 123456789012345678 /tmp/shot.png [caption]");
+  console.log("    grog discord-send-document --channel 123456789012345678 /tmp/export.csv [caption]");
   console.log("");
   console.log("  command help:");
   console.log("    grog help");
@@ -5608,6 +5679,19 @@ async function main() {
         process.exit(1);
       }
       await handleDiscordSend(discordArgs);
+      break;
+    }
+
+    case "discord-send-image":
+    case "discord-send-document": {
+      const fileArgs = process.argv.slice(3);
+      const kind = command === "discord-send-image" ? "image" : "document";
+      if (fileArgs.length === 0) {
+        console.error(`! error: missing ${kind === "image" ? "image" : "file"} path`);
+        console.error(`  usage: grog ${command} [--channel ID|--to contact] <${kind === "image" ? "image" : "file"}-path> [caption]`);
+        process.exit(1);
+      }
+      await handleDiscordSendFile(fileArgs, kind);
       break;
     }
 
