@@ -98,6 +98,8 @@ grog discord-read --all --limit 20
 grog discord-recv --all
 grog discord-read --channel 123456789012345678 --limit 20
 grog discord-send --channel 123456789012345678 "Message"
+grog discord-send-image --channel 123456789012345678 /path/to/image.png "Optional caption"
+grog discord-send-document --channel 123456789012345678 /path/to/export.csv "Optional caption"
 ```
 
 ## Personality & Voice

@@ -620,6 +620,8 @@ Send results report submission, not confirmed delivery. For a coordinated retry 
 grog telegram-send --to RECIPIENT /tmp/grog-talk-response.md
 grog telegram-send-image --to RECIPIENT /path/to/image.png "Optional caption"
 grog telegram-send-document --to RECIPIENT /path/to/export.csv "Optional caption"
+grog discord-send-image --channel CHANNEL_ID /path/to/image.png "Optional caption"
+grog discord-send-document --channel CHANNEL_ID /path/to/export.csv "Optional caption"
 ```
 
 ## Initialize
