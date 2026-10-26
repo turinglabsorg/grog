@@ -196,7 +196,7 @@ Create a bot in the Discord Developer Portal, enable `Message Content Intent`, a
 
 Discord reads save attachments to `/tmp/grog-discord-files`. Text-like attachments are printed inline; binary attachments expose their local path.
 
-Use `--all` with `talk`, `recv`, or `discord-read` to cover every server, visible text/announcement channel, and active thread. Receive uses resumable Discord Gateway sessions instead of polling every channel and routes the next response to the source channel. Archived threads are picked up again when Discord reactivates them.
+When working in a Discord channel, keep reading its incoming and outgoing history throughout the task, apply the user's latest instructions before further action, and send progress and completion there. Scope reads and replies to that channel with `--channel CHANNEL_ID`; use `--all` only for requested cross-channel work. Receive uses resumable Discord Gateway sessions, and cross-channel mode routes the next response to the source channel. Archived threads are picked up again when Discord reactivates them.
 
 ## Jam.dev Reports
 

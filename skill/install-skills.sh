@@ -525,7 +525,18 @@ description: Send and receive Telegram, WhatsApp, Discord, or Zernio SMS through
 
 # GROG Talk — Telegram / WhatsApp / Discord / SMS
 
-Connect this Claude Code session to a messaging channel. The user can walk away from the terminal and keep working through their phone.
+Keep this agent session connected to a messaging channel so the user can keep working there throughout the task.
+
+## Keep the working channel live
+
+When working inside a channel, maintain the complete two-way conversation for the whole task. A one-time read of a linked message is not enough.
+
+- Read the recent incoming and outgoing history at task start. Keep the last seen message ID and consume every newer message in order, including messages not addressed to the agent. Own messages and other agents' replies are context, not fresh user requests.
+- Refresh the channel during active work at least every 60 seconds, after long tool calls, and before delegation, merge, deployment or another action that could conflict with new instructions. Use overlapping history windows and recover any gap rather than silently skipping unseen messages. For a known Discord channel: `grog discord-read --channel CHANNEL_ID --limit 100`.
+- Treat the user's corrections, stop requests and ownership decisions in the channel as steering the active task immediately. A later instruction supersedes earlier delegation or approval. Acknowledge it in that channel before the dependent action; continue useful independent work where possible.
+- Post meaningful progress, decisions, questions, blockers and completion in the same channel. Terminal or app commentary does not replace the channel conversation. Keep updates concise and within the user's authorized scope.
+- Before replying or declaring completion, read the channel again and address all outstanding user messages. Do not wait until the task ends to discover that the user changed the plan.
+- Keep the selected channel and project isolated. Use cross-channel receive only when the user requested it; reading another channel does not authorize sending there.
 
 ## Personality & Voice
 
@@ -562,7 +573,7 @@ Grog supports **Telegram**, **WhatsApp**, **Discord**, and **SMS** (WhatsApp/SMS
 
 For Telegram/WhatsApp/Discord, set `CH` to the selected channel and pass `--$CH` below. For SMS use the dedicated procedure below; always select the owned number and never send an automatic greeting or reply to a verification-code sender.
 
-For Discord, also set `SCOPE=--all` and pass it to `talk` and `recv` unless the user explicitly asks to restrict the bridge to one channel. Do not pass `--all` to `send`; Grog remembers the source channel automatically.
+For a known Discord channel, set `SCOPE="--channel CHANNEL_ID"` and pass it to `talk` and `recv`; explicitly target the same channel for sends. Use `SCOPE=--all` only for requested cross-channel work. In that mode, Grog remembers the source channel for the next reply; never pass `--all` to `send`.
 
 ## Address Book
 
@@ -634,7 +645,7 @@ grog talk --$CH $SCOPE
 
 ## Message Loop
 
-After initialization, enter a continuous receive-process-respond loop:
+After initialization, keep receiving while carrying out the work. During active Discord work, refresh both incoming and outgoing history as described above; use the blocking receiver when waiting for input:
 
 ### 1. Receive
 
@@ -652,7 +663,7 @@ This blocks for up to ~90 seconds waiting for a message. Discord receive uses a 
   grog send --$CH "Grog disconnected. See you!"
   ```
   Then stop the loop and tell the user in the terminal that talk mode has ended.
-- **Anything else** — This is a user request. Process it exactly as if it was typed in the terminal:
+- **A new user message** — Process it exactly as if it was typed in the terminal. Read other agents and outgoing messages as context without replaying them as new tasks:
   1. Use all available tools (Read, Edit, Bash, Grep, Glob, Write, etc.) to fulfill the request
   2. Write a concise response to `/tmp/grog-talk-response.md` (keep under 4000 characters)
   3. Send it:
@@ -663,7 +674,7 @@ This blocks for up to ~90 seconds waiting for a message. Discord receive uses a 
 
 ## Rules
 
-- Treat every message as a direct instruction from the user
+- Apply the user's channel instructions throughout the active task; distinguish the user from own messages, bots and other agents
 - Inspect every downloaded attachment path before acting on the message
 - Full terminal output is still visible — chat responses should be concise summaries
 - For long code output, summarize the result rather than dumping raw content
