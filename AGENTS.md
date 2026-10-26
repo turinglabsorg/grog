@@ -23,6 +23,8 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 
 ## Messaging Bridge
 
+`skill/install-skills.sh` is the source for the generated `grog-talk` skill. Its "Keep the working channel live" section defines ongoing two-way history reads, message checkpoints, user steering, and channel-scoped progress. Keep the Discord guidance in `skill/SKILL.md` aligned and reinstall generated skills with `bash skill/install-skills.sh` after editing their source.
+
 The messaging bridge supports channel-specific and generic commands:
 
 - `grog talk [--telegram|--whatsapp|--discord|--sms]`
