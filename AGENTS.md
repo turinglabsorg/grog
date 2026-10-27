@@ -39,9 +39,11 @@ Discord `talk`, `read`, and `recv` accept `--all` to cover every server the bot 
 
 The Gateway client requests only `GUILDS`, `GUILD_MESSAGES`, and `MESSAGE_CONTENT`. It persists the session ID, resume URL, and sequence in `/tmp/grog-discord-state.json` with mode `0600`, terminates the socket after each CLI receive, and resumes on the next call to avoid consuming a new Identify session for every message. Never persist the bot token in the state file.
 
-Channel selection precedence is CLI flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
+Explicit transport flags take precedence. Bound coding sessions default to their project Discord thread; outside thread mode, selection is `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
 
 ## Project Discord threads
+
+The public setup, lifecycle and troubleshooting reference is `docs/DISCORD_THREADS.md`, linked from the README quick start. Keep it aligned with the generated skills and CLI.
 
 `skill/project-config.js` owns the shared key=value `.grog` file. `workspace` and Notion fields remain intact; Discord uses `discordServer` and `discordChannel`. `grog discord-config --server ID --channel ID` validates the text channel's guild before atomically saving. Missing configuration is a skill question, never an implicit global/client fallback. Search stops at the nearest repository boundary and canonicalizes paths.
 

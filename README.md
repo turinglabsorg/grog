@@ -43,6 +43,12 @@ grog notion search [query]        List the Notion pages and databases shared wit
 grog notion create ...            Write a Markdown file as a new Notion page or database row
 grog notion append|replace <page> Add to, or rewrite, a Notion page from a Markdown file
 grog contacts ...                 Manage the messaging address book
+grog discord-config ...           Set server/channel in the project's existing .grog
+grog thread open <title>          Open or resume a coding-session thread
+grog thread status               Show the binding, pending input and last hook handoff
+grog thread inbox [--ack ID]      Read or acknowledge pending thread input
+grog thread hooks install        Install Codex/Claude inbox hooks
+grog thread close                Disconnect this session, preserving history
 ```
 
 GitHub and Linear are chosen from the URL. Linear writes require a project `.grog` file:
@@ -92,6 +98,35 @@ Anyone with the link can open the app on port 4000, from any device, until the c
 
 Our own domains (like `alienwatch.buzz`) are served persistently, never by a one-off `grog up`: list their hosts in `~/.grog/sites.json` with what answers there (`dir` for static files, `port`, `run` to start an app, `redirect`, or `board` for the live page) and `grog serve` keeps them online, as a launchd agent on the Mac Pro. Details, security model, adding a domain and deployment: [tunnel/README.md](tunnel/README.md).
 
+## Discord threads for coding sessions
+
+Keep the coding session in tmux and its conversation in a Discord thread. Starting a Linear issue names the thread with its identifier; other work uses the session title or a short summary.
+
+Use the existing project `.grog` file for routing:
+
+```ini
+workspace=CLIENT
+discordServer=SERVER_ID
+discordChannel=CHANNEL_ID
+```
+
+The skill asks for missing server/channel settings before enabling thread mode. Configure them without replacing Linear or Notion settings:
+
+```bash
+grog discord-config --server SERVER_ID --channel CHANNEL_ID
+grog thread hooks install
+# Codex: open /hooks and review/trust the new Grog handlers.
+grog tmux-name PROJ-123
+# Without an issue: grog tmux-name "Checkout flow"
+grog send "I am checking the failing test."
+```
+
+Grog creates or resumes the session's thread and receives replies while the agent works. All questions, including verification and approval requests, stay in that thread. Each session has its own inbox even when thread titles match.
+
+Finishing a coding task does not have to close the conversation: the connected agent stays in its receive loop and can answer later. A closed CLI cannot answer by the background receiver alone; resume the session to continue. `grog thread close` explicitly disconnects while preserving history.
+
+See the [Discord thread guide](docs/DISCORD_THREADS.md) for setup, command reference, Codex/Claude hooks, acknowledgements, reconnection and troubleshooting.
+
 ## Messaging
 
 ```text
@@ -104,7 +139,7 @@ grog whatsapp-talk, grog whatsapp-recv, grog whatsapp-send, grog whatsapp-send-i
 grog discord-talk, grog discord-channels, grog discord-read, grog discord-recv, grog discord-send
 ```
 
-Channel selection is the CLI flag, then `GROG_CHANNEL`, then `channel` in `~/.grog/config.json`, then Telegram.
+An explicit transport flag always selects the transport. A bound coding session defaults to its Discord thread; outside thread mode, the defaults are `GROG_CHANNEL`, then `channel` in `~/.grog/config.json`, then Telegram.
 
 Inline text is for single-line messages. Multiline messages go in a UTF-8 file, and the command receives the file path. Discord `talk`, `read`, and `recv` accept `--all` for every server the bot can see. Receive uses the Discord Gateway and remembers the source channel for the next reply. `discordChannelId` is an optional default.
 
@@ -193,23 +228,3 @@ The tests include the whole `grog up` path against a local relay (`skill/tunnel.
 ## License
 
 MIT
-
-## Discord threads for coding sessions
-
-The existing project `.grog` file holds both Linear and Discord routing:
-
-```ini
-workspace=CLIENT
-discordServer=SERVER_ID
-discordChannel=CHANNEL_ID
-```
-
-Configure real Discord IDs with `grog discord-config --server SERVER_ID --channel CHANNEL_ID`. The CLI verifies that the channel belongs to that server and preserves the other fields. When routing is missing, the skill asks which server/channel to use before enabling this mode.
-
-Run `grog tmux-name PROJ-123` for a Linear issue, or `grog tmux-name "Session summary"` for work without an issue. Grog aligns the window name and creates or resumes its Discord thread. Outside tmux, `grog thread open "Session summary"` opens it directly. A thread uses the Linear identifier when available, otherwise the title/summary, without generated suffixes. Different coding sessions remain isolated even when titles match.
-
-In a bound project, generic `grog send` and `grog recv` use Discord automatically; explicit transport/channel arguments remain available. `grog thread inbox` reads pending human messages, and `grog thread inbox --ack MESSAGE_ID` acknowledges handled input. A background receiver retains messages across reconnects; it never executes chat text or types into tmux.
-
-Use `grog thread hooks install` for the Codex/Claude handoff at native tool boundaries. Review and trust the new Codex definitions in `/hooks`; installation does not bypass native trust or permissions. Hooks cannot cancel a shell command that is already running. Until hooks are active, the skill polls the inbox during work. An idle coding agent must stay in the receive loop to answer; the receiver alone is not an assistant. `grog thread close` disconnects without deleting history.
-
-Tests cover real CLI requests against a local HTTP fixture, two session inboxes, tmux issue naming, reconnection and acknowledgements, Codex/Claude hook payloads, concurrent delivery and configuration preservation.
