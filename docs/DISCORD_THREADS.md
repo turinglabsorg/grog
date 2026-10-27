@@ -109,17 +109,19 @@ Reads do not acknowledge messages. Acknowledge only the last message actually ha
 
 ## After the coding task finishes
 
-Finishing the task and disconnecting the conversation are separate actions. After its completion report, the connected agent stays in its receive loop so that a later message can still get an answer in the same thread.
+**The user has the last word: only an explicit user instruction to stop listening or disconnect ends the connected conversation.** Task completion, the agent's final report, silence, receive timeouts and acknowledgements such as "OK, thanks" are not permission to stop. A request to stop one task or command stops that work, not listening to the thread.
+
+After its completion report, the connected agent keeps its turn active and returns to scoped receive so a later message can still get an answer in the same thread. Never silently end the receive loop or close the thread on the agent's initiative. Before a user-requested disconnection, read pending messages and acknowledge only those handled.
 
 The background receiver is not an assistant. If the CLI or agent process is terminated, it cannot generate a reply by itself. Resume the original session and reopen the known thread to continue; Discord history and saved inbox state remain available.
 
-To disconnect deliberately:
+Only after the user explicitly requests ending thread listening, disconnect:
 
 ```bash
 grog thread close
 ```
 
-Closing preserves the thread and its history. A task finishing should not implicitly close the connection.
+Closing preserves the thread and its history. The agent never treats task completion, gratitude or silence as a request to close it.
 
 ## Troubleshooting
 
