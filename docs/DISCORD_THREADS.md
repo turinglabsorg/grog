@@ -113,6 +113,8 @@ Reads do not acknowledge messages. Acknowledge only the last message actually ha
 
 After its completion report, the connected agent keeps its turn active and returns to scoped receive so a later message can still get an answer in the same thread. Never silently end the receive loop or close the thread on the agent's initiative. Before a user-requested disconnection, read pending messages and acknowledge only those handled.
 
+After 30 minutes without a new human message, ask once in the same thread whether the user has finished or wants you to keep listening (for example, "Have you finished with this thread, or should I stay listening?"). Measure inactivity from the latest human input, not from your reports or bot messages. Respect a different interval the user explicitly chooses. This is a reminder, not a timeout: keep receiving while awaiting the answer, and reset the reminder after new human input. Silence never closes the session.
+
 The background receiver is not an assistant. If the CLI or agent process is terminated, it cannot generate a reply by itself. Resume the original session and reopen the known thread to continue; Discord history and saved inbox state remain available.
 
 Only after the user explicitly requests ending thread listening, disconnect:

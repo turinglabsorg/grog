@@ -473,6 +473,8 @@ The listener stores unconsumed human input privately and reconnects without chan
 
 After the completion report, keep the agent turn active and return to scoped receive, handling later messages in the same thread. Read pending input before any requested disconnection and acknowledge only what you handled. The background listener alone cannot answer: do not claim continuous assistance after ending the agent turn or while its runtime is unavailable. `grog thread close` preserves thread history and is used only after the user explicitly ends listening. Parent channels remain available for separate monitoring.
 
+After 30 minutes without a new human message, ask once in the same thread whether the user has finished or wants you to keep listening (for example, "Have you finished with this thread, or should I stay listening?"). Measure inactivity from the latest human input, not from your reports or bot messages. Respect a different interval the user explicitly chooses. This is a reminder, not a timeout: keep receiving while awaiting the answer, and reset the reminder after new human input. Silence never closes the session.
+
 Rename first, then do the work:
 
 - The user gives you an issue to work on (`lavoriamo a https://linear.app/.../MTR-1334/...`, `risolvi MTR-1334`, a GitHub issue or PR): rename the window to it before anything else.
@@ -566,6 +568,8 @@ Use `grog thread status` to see the bound thread. In thread mode, `grog send --d
 The listener stores unconsumed human input privately and reconnects without changing sessions. **Only an explicit instruction from the user to stop listening or disconnect ends the connected conversation. The user has the last word.** Never stop reading, leave the receive loop or run `grog thread close` on your own. Finishing a task, sending its completion report, silence, a receive timeout, or acknowledgements such as "OK, thanks" do not authorize disconnection. A request to stop one task or command stops that work; it does not end thread listening unless the user also asks for that.
 
 After the completion report, keep the agent turn active and return to scoped receive, handling later messages in the same thread. Read pending input before any requested disconnection and acknowledge only what you handled. The background listener alone cannot answer: do not claim continuous assistance after ending the agent turn or while its runtime is unavailable. `grog thread close` preserves thread history and is used only after the user explicitly ends listening. Parent channels remain available for separate monitoring.
+
+After 30 minutes without a new human message, ask once in the same thread whether the user has finished or wants you to keep listening (for example, "Have you finished with this thread, or should I stay listening?"). Measure inactivity from the latest human input, not from your reports or bot messages. Respect a different interval the user explicitly chooses. This is a reminder, not a timeout: keep receiving while awaiting the answer, and reset the reminder after new human input. Silence never closes the session.
 
 ## Keep the working channel live
 
