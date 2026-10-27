@@ -193,3 +193,23 @@ The tests include the whole `grog up` path against a local relay (`skill/tunnel.
 ## License
 
 MIT
+
+## Discord threads for coding sessions
+
+The existing project `.grog` file holds both Linear and Discord routing:
+
+```ini
+workspace=CLIENT
+discordServer=SERVER_ID
+discordChannel=CHANNEL_ID
+```
+
+Configure real Discord IDs with `grog discord-config --server SERVER_ID --channel CHANNEL_ID`. The CLI verifies that the channel belongs to that server and preserves the other fields. When routing is missing, the skill asks which server/channel to use before enabling this mode.
+
+Run `grog tmux-name PROJ-123` for a Linear issue, or `grog tmux-name "Session summary"` for work without an issue. Grog aligns the window name and creates or resumes its Discord thread. Outside tmux, `grog thread open "Session summary"` opens it directly. A thread uses the Linear identifier when available, otherwise the title/summary, without generated suffixes. Different coding sessions remain isolated even when titles match.
+
+In a bound project, generic `grog send` and `grog recv` use Discord automatically; explicit transport/channel arguments remain available. `grog thread inbox` reads pending human messages, and `grog thread inbox --ack MESSAGE_ID` acknowledges handled input. A background receiver retains messages across reconnects; it never executes chat text or types into tmux.
+
+Use `grog thread hooks install` for the Codex/Claude handoff at native tool boundaries. Review and trust the new Codex definitions in `/hooks`; installation does not bypass native trust or permissions. Hooks cannot cancel a shell command that is already running. Until hooks are active, the skill polls the inbox during work. An idle coding agent must stay in the receive loop to answer; the receiver alone is not an assistant. `grog thread close` disconnects without deleting history.
+
+Tests cover real CLI requests against a local HTTP fixture, two session inboxes, tmux issue naming, reconnection and acknowledgements, Codex/Claude hook payloads, concurrent delivery and configuration preservation.

@@ -6,6 +6,7 @@ export const DISCORD_API_BASE = "https://discord.com/api/v10";
 export const DISCORD_DOWNLOAD_DIR = "/tmp/grog-discord-files";
 
 const DISCORD_MESSAGE_CHANNEL_TYPES = new Set([0, 5, 10, 11, 12]);
+export const DISCORD_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
 const DISCORD_GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 15);
 
 const DEFAULT_ATTACHMENT_HOSTS = new Set([
@@ -66,7 +67,7 @@ export class DiscordClient {
     }
   }
 
-  async request(method, path, body) {
+  async request(method, path, body, { form } = {}) {
     this.requireToken();
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -74,8 +75,10 @@ export class DiscordClient {
         Authorization: `Bot ${this.token}`,
         "User-Agent": "DiscordBot (https://github.com/turinglabsorg/grog, 1.0)",
       };
-      const options = { method, headers };
-      if (body !== undefined) {
+      const options = { method, headers, signal: AbortSignal.timeout(form ? 120000 : 15000) };
+      if (form) {
+        options.body = form;
+      } else if (body !== undefined) {
         headers["Content-Type"] = "application/json";
         options.body = JSON.stringify(body);
       }
@@ -91,7 +94,7 @@ export class DiscordClient {
 
       if (!response.ok) {
         const detail = data?.message || `${response.status} ${response.statusText}`;
-        const error = new Error(`Discord API error: ${detail}`);
+        const error = new Error(`Discord API error: ${String(detail).split(this.token).join("[redacted]")}`);
         error.status = response.status;
         error.code = data?.code;
         throw error;
@@ -170,6 +173,20 @@ export class DiscordClient {
     return { guilds, channels };
   }
 
+  createThread(channelId, name) {
+    return this.request("POST", `/channels/${encodeURIComponent(channelId)}/threads`, {
+      name, type: 11, auto_archive_duration: 1440,
+    });
+  }
+
+  updateThread(threadId, data) {
+    return this.request("PATCH", `/channels/${encodeURIComponent(threadId)}`, data);
+  }
+
+  joinThread(threadId) {
+    return this.request("PUT", `/channels/${encodeURIComponent(threadId)}/thread-members/@me`);
+  }
+
   getChannel(channelId) {
     return this.request("GET", `/channels/${encodeURIComponent(channelId)}`);
   }
@@ -187,6 +204,19 @@ export class DiscordClient {
       content,
       allowed_mentions: { parse: [] },
     });
+  }
+
+  /** Upload one file as a message attachment; the caption is plain message text. */
+  sendFile(channelId, { data, filename, contentType = "application/octet-stream", caption = "" }) {
+    if (data.length > DISCORD_UPLOAD_LIMIT_BYTES) {
+      throw new Error(`file is larger than ${DISCORD_UPLOAD_LIMIT_BYTES / 1024 / 1024} MiB, the Discord upload limit`);
+    }
+    const payload = { allowed_mentions: { parse: [] }, attachments: [{ id: 0, filename }] };
+    if (caption) payload.content = caption;
+    const form = new FormData();
+    form.append("payload_json", JSON.stringify(payload));
+    form.append("files[0]", new Blob([data], { type: contentType }), filename);
+    return this.request("POST", `/channels/${encodeURIComponent(channelId)}/messages`, undefined, { form });
   }
 
   async waitForMessage({ timeoutMs = 90000, session = null, channelIds = null, ignoreUserId = null } = {}) {

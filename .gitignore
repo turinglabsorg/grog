@@ -1,4 +1,5 @@
 node_modules/
+.grog
 .env
 .claude/
 skill/dist/

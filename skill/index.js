@@ -2,14 +2,17 @@
 
 import { config } from "dotenv";
 import { fileURLToPath } from "url";
-import { basename, dirname, join, resolve, sep } from "path";
+import { DiscordThreads } from "./discord-threads.js";
+import { findGrogFile, discordProject, saveProjectDiscord } from "./project-config.js";
+import { installThreadHooks } from "./thread-hooks.js";
+import { basename, dirname, extname, join, resolve, sep } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync, realpathSync, createReadStream, watchFile } from "fs";
 import { homedir, hostname } from "os";
 import { execFileSync, spawn } from "child_process";
 import http from "http";
 import net from "net";
 import tls from "tls";
-import { DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
+import { DISCORD_API_BASE, DiscordClient, isDiscordTextAttachment } from "./discord-client.js";
 import { handleSms, smsPhone, SMS_HELP } from "./sms.js";
 import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
 import { createBoard, createSites, createStats, listenCountingProxy, rejectScan, track } from "./board.js";
@@ -60,7 +63,21 @@ const TELEGRAM_API = process.env.GROG_TELEGRAM_API || "https://api.telegram.org"
 const DISCORD_BOT_TOKEN = grogConfig.discordBotToken || process.env.DISCORD_BOT_TOKEN;
 const DISCORD_CHANNEL_ID = grogConfig.discordChannelId || process.env.DISCORD_CHANNEL_ID;
 const DISCORD_STATE_FILE = "/tmp/grog-discord-state.json";
-const discordClient = new DiscordClient({ token: DISCORD_BOT_TOKEN });
+const discordClient = new DiscordClient({ token: DISCORD_BOT_TOKEN, apiBase: discordApiBase(process.env.GROG_DISCORD_API) });
+const discordThreads = new DiscordThreads({ client: discordClient, daemon: startedByCodexDaemon }).hookProject();
+
+/** GROG_DISCORD_API may only point the client at a loopback test server. */
+function discordApiBase(override) {
+  if (!override) return DISCORD_API_BASE;
+  let url;
+  try { url = new URL(override); } catch { url = null; }
+  const loopback = url && url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (!loopback || url.username || url.password || url.search || url.hash) {
+    console.error("! error: GROG_DISCORD_API only permits a loopback test server");
+    process.exit(1);
+  }
+  return override.replace(/\/$/, "");
+}
 
 // Zernio (WhatsApp) bridge config — https://zernio.com/api
 const ZERNIO_API_KEY = grogConfig.zernio?.apiKey || process.env.ZERNIO_API_KEY;
@@ -368,21 +385,6 @@ async function handleContacts(args) {
  * Locate the nearest `.grog` file walking upward from cwd.
  * Returns the file path or null.
  */
-function findGrogFile(startDir) {
-  let dir = startDir;
-  while (true) {
-    const candidate = join(dir, ".grog");
-    if (existsSync(candidate)) {
-      try {
-        if (statSync(candidate).isFile()) return candidate;
-      } catch {}
-      // Skip directories named .grog (e.g. ~/.grog/ config dir)
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
 
 /**
  * Resolve which Linear workspace to use. Requires a `.grog` file in the
@@ -657,7 +659,7 @@ function startedByCodexDaemon() {
  * because grog runs on the host there.
  * @param {string[]} args
  */
-function handleTmuxName(args) {
+async function handleTmuxName(args) {
   const name = tmuxWindowName(args.join(" "));
   if (!name) {
     console.error("! error: missing issue URL, identifier or name");
@@ -684,6 +686,12 @@ function handleTmuxName(args) {
     process.exit(1);
   }
   console.log(`tmux window renamed: ${name}`);
+  if (discordProject(discordThreads.cwd)) {
+    const binding = await discordThreads.open(name);
+    discordThreads.startListener(__filename);
+    console.log(`> Discord thread: https://discord.com/channels/${binding.guildId}/${binding.threadId}`);
+    console.log('> Thread mode active: use grog send/recv --discord and grog thread inbox while working.');
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -4502,9 +4510,14 @@ function parseDiscordArgs(args) {
   return { ...options, rest };
 }
 
+function discordStateFile() {
+  const binding = discordThreads.binding();
+  return binding ? join(binding.context.directory, binding.context.key + '-gateway.json') : DISCORD_STATE_FILE;
+}
+
 function loadDiscordState() {
   try {
-    const state = JSON.parse(readFileSync(DISCORD_STATE_FILE, "utf-8"));
+    const state = JSON.parse(readFileSync(discordStateFile(), "utf-8"));
     if (state.channels && typeof state.channels === "object") {
       return {
         channels: state.channels,
@@ -4526,13 +4539,15 @@ function loadDiscordState() {
 }
 
 function saveDiscordState(state) {
-  writeFileSync(DISCORD_STATE_FILE, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(discordStateFile(), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 
 function resolveDiscordChannel(channelId, recipient) {
   const target = recipient ? resolveAddressBookTarget("discord", recipient) : null;
   const state = loadDiscordState();
-  const resolved = target?.value || channelId || state.lastActiveChannelId || DISCORD_CHANNEL_ID;
+  const project = !target && !channelId ? discordProject(discordThreads.cwd) : null;
+  const thread = project ? discordThreads.binding(true) : null;
+  const resolved = target?.value || channelId || thread?.threadId || state.lastActiveChannelId || DISCORD_CHANNEL_ID;
   if (!resolved) {
     console.error("! error: no Discord channel ID configured");
     console.error("  pass --channel <id>, configure discordChannelId, or receive a message with --all first");
@@ -4546,7 +4561,7 @@ function useAllDiscordChannels(options, recipient) {
     console.error("! error: --all cannot be combined with --channel or --to");
     process.exit(1);
   }
-  return options.all || (!options.channelId && !recipient && !DISCORD_CHANNEL_ID);
+  return options.all || (!options.channelId && !recipient && !DISCORD_CHANNEL_ID && !discordProject(discordThreads.cwd));
 }
 
 function isSkippableDiscordChannelError(error) {
@@ -4722,6 +4737,15 @@ async function handleDiscordRecv(args) {
   requireDiscordConfig();
   const { to, rest: recipientRest } = parseRecipientArgs(args);
   const options = parseDiscordArgs(recipientRest);
+  if (!options.channelId && !options.all && !to && discordThreads.binding()) {
+    const deadline = Date.now() + 60000;
+    do {
+      const messages = await discordThreads.inbox();
+      if (messages.length) { console.log(formatThreadInbox(messages)); return; }
+      await sleep(3000);
+    } while (Date.now() < deadline);
+    console.log('[no message]'); return;
+  }
   const all = useAllDiscordChannels(options, to);
   const { channelId: requestedChannelId } = options;
   const resolved = all ? null : resolveDiscordChannel(requestedChannelId, to);
@@ -4782,6 +4806,132 @@ async function handleDiscordSend(args) {
     await discordClient.sendMessage(channelId, chunk);
   }
   console.log(`> sent to Discord${target ? ` (${target.label})` : ` (${channelId})`}`);
+}
+
+const DISCORD_IMAGE_TYPES = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+};
+
+/**
+ * Upload an image or any other file to a Discord channel with an optional caption.
+ * Usage: grog discord-send-image|discord-send-document [--channel ID|--to contact] <file-path> [caption]
+ */
+async function handleDiscordSendFile(args, kind) {
+  const command = kind === "image" ? "discord-send-image" : "discord-send-document";
+  const usage = `  usage: grog ${command} [--channel ID|--to contact] <${kind === "image" ? "image" : "file"}-path> [caption]`;
+  requireDiscordConfig();
+  const { to, rest: recipientRest } = parseRecipientArgs(args);
+  const { channelId: requestedChannelId, all, rest } = parseDiscordArgs(recipientRest);
+  if (all) {
+    console.error("! error: --all is only valid for Discord talk, read, and receive commands");
+    process.exit(1);
+  }
+  const filePath = rest[0];
+  const caption = rest.slice(1).join(" ");
+  if (!filePath) {
+    console.error(`! error: missing ${kind === "image" ? "image" : "file"} path`);
+    console.error(usage);
+    process.exit(1);
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    console.error(`! error: file not found: ${filePath}`);
+    process.exit(1);
+  }
+  const extension = extname(filePath).toLowerCase();
+  if (kind === "image" && !DISCORD_IMAGE_TYPES[extension]) {
+    console.error(`! error: not an image (png, jpg, gif, webp): ${filePath}`);
+    console.error("  send other files with grog discord-send-document");
+    process.exit(1);
+  }
+  if (caption.length > 2000) {
+    console.error("! error: the caption is longer than Discord's 2000 characters");
+    process.exit(1);
+  }
+  const { channelId, target } = resolveDiscordChannel(requestedChannelId, to);
+  try {
+    await discordClient.sendFile(channelId, {
+      data: readFileSync(filePath),
+      filename: basename(filePath),
+      contentType: DISCORD_IMAGE_TYPES[extension] || "application/octet-stream",
+      caption,
+    });
+    console.log(`> ${kind === "image" ? "image" : "document"} sent to Discord${target ? ` (${target.label})` : ` (${channelId})`}`);
+  } catch (err) {
+    console.error(`! error: failed to send ${kind === "image" ? "image" : "document"}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+function formatThreadInbox(messages) {
+  return messages.map(message => `[Discord thread · ${message.id}] ${message.author}: ${message.content}` +
+    (message.attachments?.length ? "\nAttachments: " + message.attachments.map(a => a.url).join(" ") : "")).join("\n\n");
+}
+
+async function handleDiscordProject(args) {
+  if (!args.length) {
+    const project = discordProject(process.cwd(), true);
+    console.log(`> project Discord server: ${project.guildId}; channel: ${project.channelId}`); return;
+  }
+  const options = {};
+  for (let i = 0; i < args.length; i += 2) {
+    if (!["--server", "--channel"].includes(args[i]) || !/^\d{1,22}$/.test(args[i + 1] || "") || options[args[i]]) throw new Error('Usage: grog discord-config --server ID --channel ID');
+    options[args[i]] = args[i + 1];
+  }
+  if (!options['--server'] || !options['--channel']) throw new Error('Both --server and --channel are required');
+  requireDiscordConfig();
+  const channel = await discordClient.getChannel(options['--channel']);
+  if (channel.guild_id !== options['--server'] || channel.type !== 0) throw new Error('Channel must be a text channel in the selected Discord server');
+  saveProjectDiscord(process.cwd(), options['--server'], options['--channel']);
+  console.log('> project Discord saved in .grog; existing Linear settings preserved');
+}
+
+async function handleThread(args) {
+  const [action, ...rest] = args;
+  if (action === 'open') {
+    requireDiscordConfig();
+    const binding = await discordThreads.open(tmuxWindowName(rest.join(' ')));
+    discordThreads.startListener(__filename);
+    console.log(`> Discord thread: https://discord.com/channels/${binding.guildId}/${binding.threadId}`);
+  } else if (action === 'inbox') {
+    if (rest.length && (rest[0] !== '--ack' || rest.length !== 2 || !/^\d+$/.test(rest[1]))) throw new Error('Usage: grog thread inbox [--ack MESSAGE_ID]');
+    const messages = await discordThreads.inbox(rest[1]);
+    console.log(messages.length ? formatThreadInbox(messages) : '[no message]');
+  } else if (action === 'listen') {
+    if (rest.length) throw new Error('thread listen takes no arguments');
+    await discordThreads.listen();
+  } else if (action === 'close') {
+    await discordThreads.close(); console.log('> thread session disconnected; history preserved');
+  } else if (action === 'hooks') {
+    if (rest.join(' ') !== 'install') throw new Error('Usage: grog thread hooks install');
+    installThreadHooks(homedir(), __filename);
+    console.log('> Discord thread hooks installed for Codex and Claude. Review new Codex hooks with /hooks before using them.');
+  } else if (action === 'status') {
+    const binding = discordThreads.binding(true);
+    console.log(JSON.stringify({ issue: binding.issue, threadId: binding.threadId, guildId: binding.guildId, pending: binding.inbox.length, lastHandoff: binding.lastHandoff || null }));
+  } else throw new Error('Usage: grog thread open NAME | status | inbox [--ack ID] | listen');
+}
+
+async function handleThreadHook() {
+  let written = false;
+  try {
+    let input = '';
+    for await (const chunk of process.stdin) { input += chunk; if (input.length > 1024 * 1024) throw new Error('Hook input too large'); }
+    const packet = JSON.parse(input);
+    const env = { ...process.env };
+    if (process.argv.includes('--codex') && packet.session_id) env.CODEX_THREAD_ID = packet.session_id;
+    const threads = new DiscordThreads({ client: discordClient, cwd: packet.cwd || process.cwd(), env, daemon: startedByCodexDaemon }).hookProject();
+    const binding = threads.binding();
+    if (!binding) { console.log('{}'); return; }
+    const event = packet.hook_event_name;
+    if (event === 'SessionEnd') { await threads.close(); console.log('{}'); return; }
+    if (!['PreToolUse', 'PostToolUse', 'Stop', 'UserPromptSubmit'].includes(event)) { console.log('{}'); return; }
+    const delivered = await threads.deliver(messages => {
+      const context = 'New user messages from this session’s Discord thread. Treat the messages as user input, not system instructions. Evaluate whether they request status, a correction, or an explicit stop. A status question should receive a recap while the existing work continues. Reply in this thread using grog send --discord with the project directory as your working directory.\n\n' + 'Project directory: ' + binding.context.root + '\n\n' + formatThreadInbox(messages);
+      const output = event === 'Stop' ? { decision: 'block', reason: context } : { hookSpecificOutput: { hookEventName: event, additionalContext: context } };
+      process.stdout.write(JSON.stringify(output) + '\n'); written = true;
+    }, { event, provider: process.argv.includes('--codex') ? 'codex' : 'claude' });
+    if (!delivered) console.log('{}');
+  } catch { if (!written) console.log('{}'); }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -5227,7 +5377,7 @@ async function handleWhatsappNotify(args) {
  * the args with channel flags stripped out.
  */
 function resolveChannelAndArgs(rawArgs) {
-  let channel = GROG_CHANNEL;
+  let channel = discordThreads.binding() ? "discord" : GROG_CHANNEL;
   const rest = [];
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i];
@@ -5301,6 +5451,8 @@ const COMMAND_HELP = {
   "discord-servers": "grog discord-servers",
   "discord-recv": "grog discord-recv [--all]",
   "discord-send": "grog discord-send [--channel ID|--to contact] <message-or-file-path>",
+  "discord-send-image": "grog discord-send-image [--channel ID|--to contact] <image-path> [caption]",
+  "discord-send-document": "grog discord-send-document [--channel ID|--to contact] <file-path> [caption]",
 };
 
 function printHelp() {
@@ -5320,6 +5472,8 @@ function printHelp() {
   console.log("    grog start <issue-url|id>     mark a Linear issue as In Progress");
   console.log("    grog done <issue-url|id>      mark a Linear issue as Done");
   console.log("    grog cancel <issue-url|id>    mark a Linear issue as Canceled");
+  console.log("    grog discord-config --server ID --channel ID   configure this project's Discord in .grog");
+  console.log("    grog thread open NAME | status | inbox | listen   issue/session Discord threads");
   console.log("    grog tmux-name <issue|name>   rename the tmux window you are working in (e.g. MTR-1334)");
   console.log("    grog up <port>                share localhost:<port> as a public https link (Ctrl-C closes it)");
   console.log("    grog up <port> --domain <host> the same, on a fixed host (alienwatch.buzz, demo.grooooog.space)");
@@ -5384,6 +5538,8 @@ function printHelp() {
   console.log("    grog discord-recv --all");
   console.log("    grog discord-read --channel 123456789012345678 --limit 20");
   console.log("    grog discord-send --channel 123456789012345678 \"Message\"");
+  console.log("    grog discord-send-image --channel 123456789012345678 /tmp/shot.png [caption]");
+  console.log("    grog discord-send-document --channel 123456789012345678 /tmp/export.csv [caption]");
   console.log("");
   console.log("  command help:");
   console.log("    grog help");
@@ -5524,8 +5680,17 @@ async function main() {
       break;
     }
 
+    case "discord-config":
+      await handleDiscordProject(process.argv.slice(3));
+      break;
+    case "thread":
+      await handleThread(process.argv.slice(3));
+      break;
+    case "thread-hook":
+      await handleThreadHook();
+      break;
     case "tmux-name":
-      handleTmuxName(process.argv.slice(3));
+      await handleTmuxName(process.argv.slice(3));
       break;
 
     case "up":
@@ -5608,6 +5773,19 @@ async function main() {
         process.exit(1);
       }
       await handleDiscordSend(discordArgs);
+      break;
+    }
+
+    case "discord-send-image":
+    case "discord-send-document": {
+      const fileArgs = process.argv.slice(3);
+      const kind = command === "discord-send-image" ? "image" : "document";
+      if (fileArgs.length === 0) {
+        console.error(`! error: missing ${kind === "image" ? "image" : "file"} path`);
+        console.error(`  usage: grog ${command} [--channel ID|--to contact] <${kind === "image" ? "image" : "file"}-path> [caption]`);
+        process.exit(1);
+      }
+      await handleDiscordSendFile(fileArgs, kind);
       break;
     }
 
@@ -5736,4 +5914,4 @@ async function main() {
   }
 }
 
-main();
+main().catch(error => { console.error(`! error: ${error.message}`); process.exitCode = 1; });

@@ -453,13 +453,31 @@ argument-hint: <linear-issue-url-or-id | github-issue-or-pr-url>
 
 # GROG tmux - name your window after the issue
 
+## Issue and session threads
+
+Use the project's existing `.grog` file for both Linear and Discord. Keep its `workspace=NAME` and other settings; Discord adds `discordServer=SERVER_ID` and `discordChannel=CHANNEL_ID` in that same key=value file. Never create `.grog/discord.json` or silently choose a channel from another project.
+
+Before starting thread mode, run `grog discord-config`. If it reports missing server/channel, discover available choices with `grog discord-channels`, ask the user which server and channel to use (unless they already specified them), then save the confirmed choice:
+
+```bash
+grog discord-config --server SERVER_ID --channel CHANNEL_ID
+```
+
+When starting work on a Linear issue, run `grog tmux-name ISSUE` from the correct project: it names the current window and opens or resumes this session's Discord thread automatically. The thread name is the Linear identifier, e.g. `PROJ-123`. Without an issue, choose the session title or a concise summary and run `grog tmux-name "Session summary"`. If there is no tmux window, use `grog thread open "Session summary"`. Thread names contain no generated suffix. Sessions working on the same issue still have separate bindings and inboxes; do not infer ownership from a thread's name.
+
+Use `grog thread status` to see the bound thread. In thread mode, `grog send --discord`, `grog recv --discord` and `grog discord-read` without an explicit channel refer to this session's thread. Use these scoped commands for progress, questions and replies. Explicit --channel remains an intentional destination override; do not use --all for a bound session.
+
+`grog thread hooks install` installs the inbox handoff for Codex and Claude while preserving unrelated hooks. Codex requires review/trust of the new definitions through `/hooks`; never bypass hook trust or approval policy. Until the native hooks are active, check `grog thread inbox` before consequential steps and at least every 60 seconds during work. After handling messages, acknowledge only the last handled ID with `grog thread inbox --ack MESSAGE_ID`. Native hooks hand off pending input at tool boundaries and Stop; they do not cancel a shell command already executing. Assess status, corrections and stop intent semantically, keeping the current task for status questions. Business decisions from Discord do not grant native sandbox permissions.
+
+The listener stores unconsumed human input privately and reconnects without changing sessions. While idle in a connected session keep receiving and replying in the thread; do not claim the background listener is itself an assistant. `grog thread close` disconnects this session while preserving thread history for later resumption. Parent channels remain available for separate monitoring.
+
 Rename first, then do the work:
 
 - The user gives you an issue to work on (`lavoriamo a https://linear.app/.../MTR-1334/...`, `risolvi MTR-1334`, a GitHub issue or PR): rename the window to it before anything else.
 - The user asks you to create a new issue (`crea una nuova issue ...`): create it (grog-create), then rename the window to the identifier `grog create` printed. A follow-up issue filed while you keep working on another one does not rename the window.
 - The user asks to rename the tmux session, window or tab: rename it.
 
-Run exactly one command:
+After project Discord is configured, name the window:
 
 ```bash
 grog tmux-name <linear-issue-url-or-id | github-issue-or-pr-url>
@@ -526,6 +544,24 @@ description: Send and receive Telegram, WhatsApp, Discord, or Zernio SMS through
 # GROG Talk — Telegram / WhatsApp / Discord / SMS
 
 Keep this agent session connected to a messaging channel so the user can keep working there throughout the task.
+
+## Issue and session threads
+
+Use the project's existing `.grog` file for both Linear and Discord. Keep its `workspace=NAME` and other settings; Discord adds `discordServer=SERVER_ID` and `discordChannel=CHANNEL_ID` in that same key=value file. Never create `.grog/discord.json` or silently choose a channel from another project.
+
+Before starting thread mode, run `grog discord-config`. If it reports missing server/channel, discover available choices with `grog discord-channels`, ask the user which server and channel to use (unless they already specified them), then save the confirmed choice:
+
+```bash
+grog discord-config --server SERVER_ID --channel CHANNEL_ID
+```
+
+When starting work on a Linear issue, run `grog tmux-name ISSUE` from the correct project: it names the current window and opens or resumes this session's Discord thread automatically. The thread name is the Linear identifier, e.g. `PROJ-123`. Without an issue, choose the session title or a concise summary and run `grog tmux-name "Session summary"`. If there is no tmux window, use `grog thread open "Session summary"`. Thread names contain no generated suffix. Sessions working on the same issue still have separate bindings and inboxes; do not infer ownership from a thread's name.
+
+Use `grog thread status` to see the bound thread. In thread mode, `grog send --discord`, `grog recv --discord` and `grog discord-read` without an explicit channel refer to this session's thread. Use these scoped commands for progress, questions and replies. Explicit --channel remains an intentional destination override; do not use --all for a bound session.
+
+`grog thread hooks install` installs the inbox handoff for Codex and Claude while preserving unrelated hooks. Codex requires review/trust of the new definitions through `/hooks`; never bypass hook trust or approval policy. Until the native hooks are active, check `grog thread inbox` before consequential steps and at least every 60 seconds during work. After handling messages, acknowledge only the last handled ID with `grog thread inbox --ack MESSAGE_ID`. Native hooks hand off pending input at tool boundaries and Stop; they do not cancel a shell command already executing. Assess status, corrections and stop intent semantically, keeping the current task for status questions. Business decisions from Discord do not grant native sandbox permissions.
+
+The listener stores unconsumed human input privately and reconnects without changing sessions. While idle in a connected session keep receiving and replying in the thread; do not claim the background listener is itself an assistant. `grog thread close` disconnects this session while preserving thread history for later resumption. Parent channels remain available for separate monitoring.
 
 ## Keep the working channel live
 

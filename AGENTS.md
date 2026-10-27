@@ -41,6 +41,14 @@ The Gateway client requests only `GUILDS`, `GUILD_MESSAGES`, and `MESSAGE_CONTEN
 
 Channel selection precedence is CLI flag, then `GROG_CHANNEL`, then `~/.grog/config.json` `channel`, then Telegram.
 
+## Project Discord threads
+
+`skill/project-config.js` owns the shared key=value `.grog` file. `workspace` and Notion fields remain intact; Discord uses `discordServer` and `discordChannel`. `grog discord-config --server ID --channel ID` validates the text channel's guild before atomically saving. Missing configuration is a skill question, never an implicit global/client fallback. Search stops at the nearest repository boundary and canonicalizes paths.
+
+`skill/discord-threads.js` owns per-project/per-agent-session bindings and private durable inboxes under `~/.grog/discord-sessions`. Thread names are the session title/summary, or the Linear identifier when an issue is present, without generated suffixes. `tmux-name` automatically opens/resumes the corresponding thread when the project is configured; `thread open NAME` also works without tmux. Existing daemon safeguards still apply to window renaming. Bound send/receive/read commands use the thread unless explicitly addressed elsewhere. Different sessions have different inboxes even for identical thread names. A failed/ambiguous creation must never be silently repeated or attached by name.
+
+A detached per-thread listener polls only its bound thread and preserves human input until acknowledged. Native tool/Stop hooks deliver the inbox through supported JSON feedback; they never type into tmux or execute chat text as shell commands. `thread hooks install` merges only Grog handlers into Codex and Claude hook settings; it never grants hook trust or sandbox approval. Idle sessions still need an active agent receiving; the listener alone cannot answer. `thread close` preserves history. `skill/discord-threads.test.js` tests the actual CLI and HTTP boundary, session isolation, replay/ack, hook delivery and configuration preservation. Install every imported module through `install.sh --runtime-only`.
+
 ## SMS
 
 `skill/sms.js` owns Zernio SMS; all SMS use this CLI boundary. `sms-numbers`, `sms-enable`, `sms-talk`, `sms-read`, `sms-recv`, and `sms-send` have generic `--sms` routing. Contacts use `addressBook.ALIAS.sms`; optional non-secret defaults are `zernio.smsNumber` and `zernio.smsTokenName`. Credentials come from hush (`ZERNIO_API_KEY` by default), never a new plaintext config field. `GROG_ZERNIO_API` only permits a loopback HTTP test server. Requests use the exact owned phone and matching active `platform=sms` account; reject partial provider results and incomplete pagination. Do not fetch message attachments or arbitrary message URLs.
