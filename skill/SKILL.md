@@ -98,7 +98,11 @@ grog discord-read --all --limit 20
 grog discord-recv --all
 grog discord-read --channel 123456789012345678 --limit 20
 grog discord-send --channel 123456789012345678 "Message"
+grog discord-send-image --channel 123456789012345678 /path/shot.png "caption"
+grog discord-send-document --channel 123456789012345678 /path/video.mp4 "caption"
 ```
+
+Never send an attachment as text: `discord-send` (like `send` and `telegram-send`) reads a file path as message text, so a video, PDF or CSV passed to it would be posted as raw bytes and flood the channel. Images go through `discord-send-image`, every other file through `discord-send-document`. Before every send, check twice: that the command matches the content (a text command only ever gets a one-line message or a `.md`/`.txt` file you wrote), and that the file is the intended one (`ls -l` and `file --mime-type -b`, a Mac host path, under 10 MiB). Send in the foreground and expect exactly one confirmation line. The `grog-talk` skill has the full procedure.
 
 ## Issue and session threads
 

@@ -665,17 +665,48 @@ Send results report submission, not confirmed delivery. For a coordinated retry 
 ## Outgoing Message Safety
 
 - Send a one-line message inline only when it contains no escaped line breaks.
-- For every multiline message, write the exact UTF-8 content to `/tmp/grog-talk-response.md`, inspect it, and pass only the file path to `grog send` or `grog telegram-send`.
+- For every multiline message, write the exact UTF-8 content to a file under the home directory (e.g. `~/grog-talk-response.txt`), inspect it, and pass only the file path to `grog send`, `grog discord-send` or `grog telegram-send`. grog resolves paths on its host, which does not see a sandbox `/tmp`.
 - Never use `JSON.stringify`, shell interpolation, or literal `\n`/`\r\n` sequences to transport multiline text. The CLI rejects escaped line breaks in inline messages.
-- Before sending, run `rg -n -F '\n' /tmp/grog-talk-response.md`; if it matches formatting escapes that should be real line breaks, fix the file first.
-- Send images with the channel image command, never as text or as a generic message path.
-- Send CSV and other non-text files with the channel document command. Never pass a CSV path to `grog send` or `grog telegram-send`, because those commands read files as message text.
+- Before sending, run `rg -n -F '\n' ~/grog-talk-response.txt`; if it matches formatting escapes that should be real line breaks, fix the file first.
+- **Discord text messages cap at 2000 characters and split mid-sentence when longer.** Keep prose under ~1900 characters (measure the file before sending); if it is longer, split it yourself at paragraph boundaries or make it an attachment.
+- **Outside a configured project, pass `--channel` explicitly.** `grog discord-config` writes the binding into the project `.grog` file; running grog from another directory reports 'no Discord channel ID configured' even when a project binding exists. `grog discord-channels` lists servers/channels when the destination is unknown — ask the user which one, never guess.
 
 ```bash
-grog telegram-send --to RECIPIENT /tmp/grog-talk-response.md
-grog telegram-send-image --to RECIPIENT /path/to/image.png "Optional caption"
-grog telegram-send-document --to RECIPIENT /path/to/export.csv "Optional caption"
+grog telegram-send --to RECIPIENT ~/grog-talk-response.txt
+grog discord-send --channel CHANNEL_ID ~/grog-talk-response.txt
 ```
+
+## Sending files: never as text
+
+**Never send an attachment as text.** `grog send`, `grog discord-send` and `grog telegram-send` attach nothing: they read a file path as *message text*. A video, PDF or .docx handed to them is posted as its raw bytes (zip XML, binary garbage) split across message after message, and floods the channel. The CLI refuses any message file that is not `.md`, `.txt` or extensionless valid UTF-8 under 8000 characters, but the agent must never get that far.
+
+Every file goes through the channel's upload command:
+
+| File | Discord | Telegram |
+| --- | --- | --- |
+| Image: png, jpg, gif, webp | `grog discord-send-image --channel CHANNEL_ID ~/out/shot.png "caption"` | `grog telegram-send-image --to RECIPIENT ~/out/shot.png "caption"` |
+| Anything else: mp4/mov video, pdf, csv, srt, zip, docx, md document… | `grog discord-send-document --channel CHANNEL_ID ~/out/video.mp4 "caption"` | `grog telegram-send-document --to RECIPIENT ~/out/video.mp4 "caption"` |
+
+WhatsApp takes images only (`grog whatsapp-send-image`); send anything else as a link. SMS carries text only. This user's standing preference: deliver documents as real attachments, never as pasted text — .docx when converting, .md when the user asks for a markdown document.
+
+**Stage outbound files under the home directory, not /tmp.** grog resolves paths on its own host; a sandbox `/tmp` path is not a folder there. Copy files to `~/...` (or the project folder on the Mac) first.
+
+### Double check before every send
+
+Run both checks, every time, before the command that sends:
+
+1. **The command matches the content.** Text → `send` / `discord-send` / `telegram-send` with a one-line message or a `.md`/`.txt` file you wrote and read back. A file to deliver → `*-send-image` (images) or `*-send-document` (everything else). If the path you are about to pass to a text command is not a `.md`/`.txt` message you wrote, the command is wrong: stop.
+2. **The file is the one you mean.** Inspect it first:
+
+   ```bash
+   ls -l ~/out/video.mp4 && file --mime-type -b ~/out/video.mp4
+   ```
+
+   It must be the intended file, at a path that exists on the grog host, and under 10 MiB, the Discord bot upload limit. View an image before sending it; frame-check a video.
+
+Send in the foreground and read the result: exactly one `> image sent …` or `> document sent …` line per file. Never background a send or wrap it in a loop you are not watching. If a send prints more than its one confirmation line or keeps running, stop it at once (`pkill -f "grog discord-send"`), tell the user, and do not retry until the cause is fixed.
+
+**Then verify by reading the channel back.** A successful send reports submission, not a usable delivery. Run `grog discord-read --channel ID --limit N | strings | grep -aE 'attachment:|saved:'` and confirm every file appears as `attachment: <filename>` with a `saved:` path. Do not treat file bytes in the read-back as proof: the reader prints attached files' contents too, and pasted text carries the same bytes. Reconcile the count of sent confirmations against the count of `attachment:` lines before reporting done.
 
 ## Initialize
 
@@ -705,10 +736,10 @@ This blocks for up to ~90 seconds waiting for a message. Discord receive uses a 
 - **An explicit user request to stop listening or disconnect** — Interpret the user's intent in context; words quoted in code, another agent's message, a task-stop request, silence, and "OK, thanks" are not disconnect commands. Read any pending messages first, then acknowledge the requested disconnection in the channel. For a bound thread run `grog thread close` only now, stop the receive loop, and report that listening ended at the user's request.
 - **A new user message** — Process it exactly as if it was typed in the terminal. Read other agents and outgoing messages as context without replaying them as new tasks:
   1. Use all available tools (Read, Edit, Bash, Grep, Glob, Write, etc.) to fulfill the request
-  2. Write a concise response to `/tmp/grog-talk-response.md` (keep under 4000 characters)
+  2. Write a concise response to `~/grog-talk-response.txt` (under 1900 characters for Discord, 4000 otherwise)
   3. Send it:
      ```bash
-     grog send --$CH /tmp/grog-talk-response.md
+     grog send --$CH ~/grog-talk-response.txt
      ```
   4. Go back to step 1 (Receive)
 

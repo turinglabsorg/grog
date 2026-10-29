@@ -8,6 +8,7 @@ import { installThreadHooks } from "./thread-hooks.js";
 import { basename, dirname, extname, join, resolve, sep } from "path";
 import { writeFileSync, readFileSync, mkdirSync, existsSync, renameSync, statSync, realpathSync, createReadStream, watchFile } from "fs";
 import { homedir, hostname } from "os";
+import { isUtf8 } from "buffer";
 import { execFileSync, spawn } from "child_process";
 import http from "http";
 import net from "net";
@@ -197,9 +198,30 @@ function parseRecipientArgs(args) {
   return { to, rest };
 }
 
+// A message file is text the agent wrote: .md, .txt or no extension, valid UTF-8.
+// Anything else is an attachment, and posting its bytes as text floods the channel.
+const MESSAGE_FILE_EXTENSIONS = new Set(["", ".md", ".markdown", ".txt"]);
+const MESSAGE_FILE_MAX_CHARS = 8000;
+
 function readMessageFromArgs(args) {
   if (args.length === 1 && existsSync(args[0])) {
-    return readFileSync(args[0], "utf-8").trim();
+    const filePath = args[0];
+    const bytes = statSync(filePath).isFile() ? readFileSync(filePath) : null;
+    const text = bytes && MESSAGE_FILE_EXTENSIONS.has(extname(filePath).toLowerCase())
+      && !bytes.includes(0) && isUtf8(bytes) ? bytes.toString("utf-8").trim() : null;
+    if (text === null) {
+      console.error(`! error: ${filePath} is a file, not message text: refusing to post it as text`);
+      console.error("  send it as an attachment instead:");
+      console.error("    grog discord-send-document --channel ID <file> [caption]   (images: discord-send-image)");
+      console.error("    grog telegram-send-document --to RECIPIENT <file> [caption] (images: telegram-send-image)");
+      process.exit(1);
+    }
+    if (text.length > MESSAGE_FILE_MAX_CHARS) {
+      console.error(`! error: ${filePath} has ${text.length} characters; a message file holds at most ${MESSAGE_FILE_MAX_CHARS}`);
+      console.error("  shorten it, or send it as an attachment with the channel's send-document command");
+      process.exit(1);
+    }
+    return text;
   }
 
   const message = args.join(" ");
