@@ -25,6 +25,8 @@ Grog is a Claude/Codex skill and CLI for GitHub, Linear, Jam.dev, and messaging 
 
 `skill/install-skills.sh` is the source for the generated `grog-talk` skill. Its "Keep the working channel live" section defines ongoing two-way history reads, message checkpoints, user steering, and channel-scoped progress. Keep the Discord guidance in `skill/SKILL.md` aligned and reinstall generated skills with `bash skill/install-skills.sh` after editing their source.
 
+Text sends (`send`, `discord-send`, `telegram-send`, `whatsapp-send`) read a single existing path as message text through `readMessageFromArgs`, which refuses anything but `.md`, `.txt` or extensionless valid UTF-8 under 8000 characters and points to the upload commands. Files are only ever delivered with `*-send-image` / `*-send-document`; the `grog-talk` section "Sending files: never as text" is the agent procedure, and must stay in step with that guard.
+
 The messaging bridge supports channel-specific and generic commands:
 
 - `grog talk [--telegram|--whatsapp|--discord|--sms]`
