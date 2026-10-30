@@ -14,8 +14,12 @@ export function installThreadHooks(home, cli, node = process.execPath) {
       const groups = settings.hooks[event] || [];
       if (!Array.isArray(groups)) throw new Error('Invalid agent hook event configuration');
       // Remove only previous Grog thread handlers, preserving every unrelated hook.
-      settings.hooks[event] = groups.map(group => ({ ...group, hooks: group.hooks.filter(hook => !/thread-hook --(?:codex|claude)(?:\s|$)/.test(hook.command || '')) })).filter(group => group.hooks.length);
-      settings.hooks[event].push({ hooks: [{ type: 'command', command: `${quote(node)} ${quote(cli)} thread-hook --${provider}`, timeout: event === 'SessionEnd' ? 3 : 5 }] });
+      settings.hooks[event] = groups.map(group => ({ ...group, hooks: group.hooks.filter(hook => !/thread-hook --(?:codex|claude)(?:\s|;|$)/.test(hook.command || '')) })).filter(group => group.hooks.length);
+      const local = `${quote(node)} ${quote(cli)} thread-hook --${provider}`;
+      const command = provider === 'claude'
+        ? `if [ -n "\${SCOTT_BRIDGE:-}" ]; then exec grog thread-hook --claude; else exec ${local}; fi`
+        : local;
+      settings.hooks[event].push({ hooks: [{ type: 'command', command, timeout: event === 'SessionEnd' ? 3 : 5 }] });
     }
     pending.push({ file, original, content: JSON.stringify(settings, null, 2) + '\n' });
   }

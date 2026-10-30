@@ -63,12 +63,16 @@ beforeEach(() => {
 });
 after(async () => { await new Promise(resolve => server.close(resolve));rmSync(root, { force: true, recursive: true }); });
 
-function command(args, session = 'session-a', input = '', cwd = project, overrides = {}) {
+function run(executable, args, session = 'session-a', input = '', cwd = project, overrides = {}) {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...env(session), ...overrides }, stdio: ['pipe','pipe','pipe'] });
+    const child = spawn(executable, args, { cwd, env: { ...env(session), ...overrides }, stdio: ['pipe','pipe','pipe'] });
     let out = '', err = '';child.stdout.on('data', b => out += b);child.stderr.on('data', b => err += b);
     child.stdin.end(input);child.on('close', code => resolve({ code, out, err }));
   });
+}
+
+function command(args, ...options) {
+  return run(process.execPath, [cli, ...args], ...options);
 }
 
 test('the shared .grog preserves Linear, Notion and comments when Discord is configured', () => {
@@ -146,10 +150,54 @@ test('Stop hook continues with a real pending message but never invents a contin
 test('hook installation preserves unrelated settings and is idempotent for both runtimes', () => {
   mkdirSync(join(home,'.claude'),{recursive:true});mkdirSync(join(home,'.codex'),{recursive:true});
   const file=join(home,'.codex','hooks.json');writeFileSync(file,JSON.stringify({description:'keep',hooks:{PreToolUse:[{hooks:[{type:'command',command:'existing policy'}]}]}}));
-  const settings=join(home,'.claude','settings.json');writeFileSync(settings,JSON.stringify({permissions:{allow:['Read']}}));
+  const settings=join(home,'.claude','settings.json');writeFileSync(settings,JSON.stringify({permissions:{allow:['Read']},hooks:{PreToolUse:[{matcher:'Bash',hooks:[{type:'command',command:'existing Claude policy'},{type:'command',command:'legacy-node /legacy/grog.js thread-hook --claude'}]}]}}));
   installThreadHooks(home,cli);installThreadHooks(home,cli);
   assert.equal(JSON.parse(readFileSync(file)).hooks.PreToolUse.length,2);assert.equal(JSON.parse(readFileSync(file)).description,'keep');assert.deepEqual(JSON.parse(readFileSync(settings)).permissions,{allow:['Read']});
+  assert.equal(JSON.parse(readFileSync(settings)).hooks.PreToolUse[0].hooks[0].command,'existing Claude policy');
+  for (const [provider, path] of [['codex', file], ['claude', settings]]) {
+    for (const groups of Object.values(JSON.parse(readFileSync(path)).hooks)) {
+      const handlers = groups.flatMap(group => group.hooks).filter(hook => hook.command.includes(`thread-hook --${provider}`));
+      assert.equal(handlers.length, 1, `${provider} hook installed more than once`);
+    }
+  }
 });
+
+for (const bridged of [false, true]) {
+  test(`installed Claude hooks deliver and disconnect through ${bridged ? 'Scott with host session identity' : 'the native runtime'}`, async () => {
+    const host = { CODEX_THREAD_ID: '', TMUX: '/tmp/claude-hooks,1,0', TMUX_PANE: '%43' };
+    const session = new DiscordThreads({client: new DiscordClient({token: 'test-token', apiBase: api}), home, cwd: project, env: {...env(''), ...host}});
+    const opened = await session.open('Claude hook regression');
+    const bin = join(root, 'hook bin');mkdirSync(bin, {recursive: true});
+    const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
+    const incompatibleNode = join(bin, 'macOS-node');
+    writeFileSync(incompatibleNode, '#!/bin/sh\necho "Exec format error: host Node must not run in the container" >&2\nexit 126\n', {mode: 0o755});
+    writeFileSync(join(bin, 'grog'), `#!/bin/sh\nexport TMUX=${quote(host.TMUX)} TMUX_PANE=${quote(host.TMUX_PANE)}\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`, {mode: 0o755});
+    installThreadHooks(home, cli, bridged ? incompatibleNode : process.execPath);
+    const hooks = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'))).hooks;
+    const overrides = {...host, PATH: bin + ':' + process.env.PATH, SCOTT_BRIDGE: ''};
+    if (bridged) Object.assign(overrides, {SCOTT_BRIDGE: 'fixture', TMUX: '', TMUX_PANE: ''});
+    let id = 700;
+    for (const event of ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
+      if (event !== 'SessionEnd') {
+        messages.get(opened.threadId).push({id: String(++id), author: {username: 'Owner'}, content: `Message for ${event}`});
+        await session.sync();
+      }
+      const handler = hooks[event].flatMap(group => group.hooks).find(hook => hook.command.includes('thread-hook --claude'));
+      const result = await run('sh', ['-c', handler.command], '', JSON.stringify({cwd: project, session_id: 'claude-native-id', hook_event_name: event}), project, overrides);
+      assert.equal(result.code, 0, result.err);assert.equal(result.err, '');
+      const output = JSON.parse(result.out);
+      if (event === 'SessionEnd') {
+        assert.deepEqual(output, {});assert.equal(session.binding(), null);
+      } else {
+        if (event === 'Stop') {assert.equal(output.decision, 'block');assert.match(output.reason, /Message for Stop/);}
+        else {assert.equal(output.hookSpecificOutput.hookEventName, event);assert.ok(output.hookSpecificOutput.additionalContext.includes(`Message for ${event}`));}
+        assert.equal(session.binding(true).inbox.length, 0);
+        assert.equal(session.binding(true).lastHandoff.event, event);
+        assert.equal(session.binding(true).lastHandoff.provider, 'claude');
+      }
+    }
+  });
+}
 
 test('a stale in-flight sync cannot replay a message acknowledged by another call', async () => {
   const session=bridge();const opened=await session.open('Session title');

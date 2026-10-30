@@ -87,6 +87,8 @@ grog thread hooks install
 
 The installer merges Grog handlers into the existing Codex and Claude hook configuration while preserving unrelated hooks and settings. Codex requires review and trust of new or changed non-managed definitions through `/hooks`; installing them does not grant trust. See [Codex hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks) and the [Claude hook reference](https://code.claude.com/docs/en/hooks).
 
+When Claude runs in a Scott container, its hooks invoke `grog` through Scott's existing host bridge. This uses the host's Node runtime and tmux session binding, just like other bridged Grog commands. Running a macOS Node binary directly inside Linux fails with `Exec format error`; using Linux Node alone also loses the host's tmux identity. Native Claude and Codex retain their direct runtime commands. After updating Grog, rerun `grog thread hooks install` to replace previously generated hook commands.
+
 A background receiver stores pending human messages. The native hooks hand them to the running session at tool boundaries and before stopping. They do not type into tmux. They cannot cancel a shell command already executing, and they do not turn a Discord reply into a native permission grant.
 
 Inspect delivery metadata with:
@@ -132,6 +134,7 @@ Closing preserves the thread and its history. The agent never treats task comple
 | No project destination | Run `grog discord-config`; have the skill ask for the intended server/channel. |
 | Bot cannot create or use a thread | Check its access to the configured text channel and Discord thread permissions. |
 | Inbox fills, but the agent does not react | Check the native hook installation, Codex trust and whether the agent session is still active. |
+| Claude hooks fail with `Exec format error` in Scott | Update Grog and rerun `grog thread hooks install`. Scott must expose `grog` as a host tool through its existing bridge. |
 | A manual read works | Confirm `lastHandoff` and test a fresh human message before claiming native delivery works. |
 | Wrong session receives a reply | Check the project directory and session binding; do not select a thread by its title. |
 | Thread is locked | Have an administrator reopen it before resuming. |
@@ -141,7 +144,7 @@ Runtime state is stored privately under `~/.grog/discord-sessions`. It is separa
 
 ## Verification
 
-The integration suite exercises the actual CLI against a local HTTP fixture: shared configuration preservation, naming, two independent sessions, tmux issue activation, reopen/reconnect, acknowledgements, concurrent delivery, failure recovery, both hook payloads and nested project routing.
+The integration suite exercises the actual CLI against a local HTTP fixture: shared configuration preservation, naming, two independent sessions, tmux issue activation, reopen/reconnect, acknowledgements, concurrent delivery, failure recovery, both hook payloads and nested project routing. It also executes all five generated Claude hooks through a shell, both natively and with a stand-in Scott bridge whose session identity exists only on the host.
 
 ```bash
 node --check skill/index.js
