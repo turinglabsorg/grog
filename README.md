@@ -1,6 +1,6 @@
 # Grog
 
-Grog is a local CLI and Claude/Codex skill for GitHub issues, Linear issues, pull requests, Jam.dev reports, and Telegram, WhatsApp, Discord, and SMS messaging.
+Grog is a local CLI and Claude/Codex skill for GitHub issues, Linear issues, pull requests, Jam.dev reports, and Telegram, WhatsApp, Discord, and SMS messaging. It also gives the agent a desktop of its own, with a real browser.
 
 It runs on your machine. Existing integrations use `~/.grog/config.json`; SMS and Notion credentials are injected by name from hush. The CLI talks to GitHub, Linear, and the messaging APIs directly.
 
@@ -39,6 +39,7 @@ grog tmux-name <issue-url|id|name> Name your tmux window after the issue (MTR-13
 grog up <port>                    Share localhost:<port> as a public https link until stopped
 grog up <port> --domain <host>    The same on a fixed host (demo.grooooog.space, alienwatch.buzz)
 grog serve                        Keep the sites in ~/.grog/sites.json online (site domains)
+grog desktop up|open|shot|read|type ... A Linux desktop with a real browser, sessions kept
 grog notion search [query]        List the Notion pages and databases shared with the integration
 grog notion create ...            Write a Markdown file as a new Notion page or database row
 grog notion append|replace <page> Add to, or rewrite, a Notion page from a Markdown file
@@ -97,6 +98,28 @@ grog up 4000
 Anyone with the link can open the app on port 4000, from any device, until the command stops. It says where it runs and warns at once when nothing listens on the port. The link goes through our relay (`tunnel/`): the machine only dials out and accepts no inbound connection, only that one port is reachable, and only holders of the tunnel token (kept in hush as `GROG_TUNNEL_TOKEN`, never printed) can open links. Share links only for apps that are fine to show.
 
 Our own domains (like `alienwatch.buzz`) are served persistently, never by a one-off `grog up`: list their hosts in `~/.grog/sites.json` with what answers there (`dir` for static files, `port`, `run` to start an app, `redirect`, or `board` for the live page) and `grog serve` keeps them online, as a launchd agent on the Mac Pro. Details, security model, adding a domain and deployment: [tunnel/README.md](tunnel/README.md).
+
+## A desktop for the agent
+
+`grog desktop` gives the agent a Linux desktop with an ordinary Chromium on a real X display. It is the `cora-box:latest` image that [Cora](https://github.com/turinglabsorg/cora) gives its own agents: build it from Cora's `box/` folder (`docker build -t cora-box:latest box`), or pass `--image`. A site sees a person there, not a script. The agent's own headless Chrome reports `navigator.webdriver`, and Cloudflare's Turnstile or a Slack login stop it; this browser gets the real login page. Sessions live in the desktop's volumes, so a login done once survives restarts.
+
+```bash
+grog desktop up                            # start it, or adopt the one already running
+grog desktop open https://example.com/login
+grog desktop shot --out screen.jpg         # look at the screen
+grog desktop click 640 410                 # act on what you saw
+grog desktop type --secret SITE_PASSWORD   # typed blind, through hush
+grog desktop read text                     # the page as data
+```
+
+- Two channels on the same window. Pixels: `shot`, `click`, `key`, `type`, `paste`. Data: `read text|query|html|eval|cookies|storage|network|targets|goto`, through `cora-cdp` on Chromium's debugging port. No driver starts the browser and it never runs with `--enable-automation`.
+- `type --secret NAME` sends the value from hush to `xdotool` inside the desktop through the environment. It is never on a command line and never printed.
+- `paste --file|--text` fills both X selections. The desktop keeps PRIMARY and CLIPBOARD in step, so selecting text in the page replaces what you put there: paste right after.
+- One desktop, several agents, so a login is done once. `who` shows who used it in the last ten minutes, and an action warns when someone else did. A customer's work gets a desktop of its own: `--name acme` is `grog-desk-acme`, with its own volumes.
+- `up` joins the desktop to your tailnet and prints the authorization link the first time. `status` shows how to watch it, `vnc://` on port 5900 and noVNC on port 6080, and whether VNC asks for a password.
+- `run -- <command>` runs a command inside it. `down` stops it and keeps the sessions, `rm` removes the container and keeps them, `rm --volumes` removes them too.
+
+`GROG_DOCKER`, `GROG_HUSH` and `GROG_DESK_IMAGE` point at another docker, hush or image.
 
 ## Discord threads for coding sessions
 

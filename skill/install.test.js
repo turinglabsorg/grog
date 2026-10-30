@@ -46,6 +46,7 @@ test("runtime-only update installs SMS and skills without touching credential co
     assert.match(result.stdout, /Updated 2 grog runtime/);
     for (const runtime of runtimes) {
       assert.equal(readFileSync(join(runtime, "sms.js"), "utf8"), readFileSync(join(here, "sms.js"), "utf8"));
+      assert.equal(readFileSync(join(runtime, "desktop.js"), "utf8"), readFileSync(join(here, "desktop.js"), "utf8"));
       assert.equal(readFileSync(join(runtime, ".env"), "utf8"), sentinel);
     }
     assert.equal(readFileSync(join(root, ".grog/config.json"), "utf8"), sentinel);

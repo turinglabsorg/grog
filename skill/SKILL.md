@@ -36,6 +36,10 @@ Shares a local dev server as a public HTTPS link, `https://<code>.grooooog.space
 
 Writes a Markdown file to Notion as a new page, a database row with its properties, or the new body of an existing page. The workspace is always named and its token is read from hush, never printed.
 
+### `grog desktop`
+
+A Linux desktop of the agent's own, with an ordinary Chromium on a real X display, for sites that stop a headless browser (Cloudflare Turnstile, Slack). `grog desktop up`, then `open <url>`, `shot` to look, `click`/`key`/`type`/`paste` to act, `read text|eval|...` for the page as data. `type --secret NAME` types a hush secret blind. Logins stay in its volumes. It is a command, not a slash skill; see the README.
+
 ### `/grog-talk`
 
 Opens a bidirectional Telegram, WhatsApp, Discord, or SMS bridge. Messages received from the selected channel are processed as if they were typed in the terminal, and responses are sent back through the same channel.
@@ -159,6 +163,7 @@ Since it runs inside Claude Code, it has full access to your local filesystem, g
 ```
 ~/.claude/tools/grog/          # The grog CLI tool
   index.js                     # Main script
+  desktop.js                   # grog desktop
   package.json                 # Dependencies
   .env                         # Your tokens (GH_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
 

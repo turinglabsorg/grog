@@ -29,7 +29,7 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 copy_runtime() {
-  for file in index.js project-config.js discord-threads.js thread-hooks.js board.js discord-client.js github-issues.js notion.js sms.js package.json package-lock.json; do
+  for file in index.js project-config.js discord-threads.js thread-hooks.js board.js discord-client.js github-issues.js notion.js sms.js desktop.js package.json package-lock.json; do
     cp "$SCRIPT_DIR/$file" "$1/"
   done
 }

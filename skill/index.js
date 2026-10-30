@@ -17,6 +17,7 @@ import { DISCORD_API_BASE, DiscordClient, isDiscordTextAttachment } from "./disc
 import { handleSms, smsPhone, SMS_HELP } from "./sms.js";
 import { createGitHubIssue, parseGitHubRepository } from "./github-issues.js";
 import { createBoard, createSites, createStats, listenCountingProxy, rejectScan, track } from "./board.js";
+import { DESKTOP_HELP, handleDesktop } from "./desktop.js";
 import {
   NotionClient,
   NotionError,
@@ -5451,6 +5452,7 @@ const COMMAND_HELP = {
   up: "grog up <port> [--domain <host>]",
   notion: NOTION_USAGE,
   serve: "grog serve   (keeps the sites in ~/.grog/sites.json online, and a {board:true} host shows the live page)",
+  ...DESKTOP_HELP,
   "tmux-name": "grog tmux-name <linear-issue-url-or-identifier|github-issue-or-pr-url|name>",
   contacts: "grog contacts list\n         grog contacts get <alias>\n         grog contacts save <alias> [--telegram ID] [--whatsapp +39...] [--discord ID] [--sms +31...]",
   talk: "grog talk [--whatsapp|--telegram|--discord|--sms] [--number NUMBER] [--all]",
@@ -5497,6 +5499,7 @@ function printHelp() {
   console.log("    grog discord-config --server ID --channel ID   configure this project's Discord in .grog");
   console.log("    grog thread open NAME | status | inbox | listen   issue/session Discord threads");
   console.log("    grog tmux-name <issue|name>   rename the tmux window you are working in (e.g. MTR-1334)");
+  console.log("    grog desktop <up|status|open|shot|read|type>   a browser on a real desktop, sessions kept");
   console.log("    grog up <port>                share localhost:<port> as a public https link (Ctrl-C closes it)");
   console.log("    grog up <port> --domain <host> the same, on a fixed host (alienwatch.buzz, demo.grooooog.space)");
   console.log("    grog serve                    keep ~/.grog/sites.json online; a {\"board\":true} host is the live page");
@@ -5725,6 +5728,10 @@ async function main() {
 
     case "serve":
       await handleServe();
+      break;
+
+    case "desktop":
+      await handleDesktop(process.argv.slice(3));
       break;
 
     case "sms-numbers":
