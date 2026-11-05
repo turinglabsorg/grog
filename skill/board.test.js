@@ -97,7 +97,9 @@ test("scanner paths are probes and known clients are bots", () => {
   assert.equal(isScanPath("/xmlrpc.php"), true);
   assert.equal(isScanPath("/file.php"), true);
   assert.equal(isScanPath("/backup.bak"), true);
-  assert.equal(isScanPath("/vendor/pkg"), true);
+  assert.equal(isScanPath("/vendor/react.js"), false, "a site's own libraries are served");
+  assert.equal(isScanPath("/landing/vendor/react-dom.js"), false);
+  assert.equal(isScanPath("/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php"), true, "the PHP probe under vendor is still refused");
   assert.equal(isScanPath("/page\\..\\win.ini"), true);
   assert.equal(isBot(""), false);
   assert.equal(isBot(undefined), false);
