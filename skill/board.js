@@ -55,7 +55,9 @@ const SCAN_EXT = new Set([
   ".php", ".php3", ".php5", ".phtml", ".asp", ".aspx", ".jsp", ".cgi",
   ".bak", ".old", ".swp", ".sql", ".ini", ".orig",
 ]);
-const SCAN_SEGMENT = /^(wp-admin|wp-login|wp-content|wp-includes|xmlrpc\.php|phpmyadmin|pma|cgi-bin|phpunit|vendor)$/i;
+// "vendor" is not here: sites keep their libraries there (/vendor/react.js). The PHP probes under it
+// (/vendor/phpunit/…/eval-stdin.php) are still refused by "phpunit" and by the .php extension.
+const SCAN_SEGMENT = /^(wp-admin|wp-login|wp-content|wp-includes|xmlrpc\.php|phpmyadmin|pma|cgi-bin|phpunit)$/i;
 const SCAN_MARK = /xmlrpc\.php|phpmyadmin|wp-login|wp-admin/i;
 const BOT_UA = /bot(?:[^a-z]|$)|spider|crawler|crawl|slurp|wget\/|curl\/|python-requests|aiohttp|go-http-client|scrapy|okhttp|libwww|sqlmap|nikto|nmap|masscan|zgrab|nuclei|dirbuster|gobuster|feroxbuster|semrush|ahrefs|mj12bot|dotbot|petalbot|bytespider|gptbot|claudebot|anthropic|ccbot|headlesschrome|phantomjs|selenium|puppeteer/i;
 
