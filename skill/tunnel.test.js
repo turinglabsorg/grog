@@ -288,18 +288,25 @@ test("grog serve keeps the sites of sites.json online, files only from their fol
   writeFileSync(join(site, ".env"), "SECRET=1");
   writeFileSync(join(scratch, "outside.txt"), "outside");
   symlinkSync(join(scratch, "outside.txt"), join(site, "escape.txt"));
+  const anyName = join(scratch, "any-name");
+  mkdirSync(anyName, { recursive: true });
+  writeFileSync(join(anyName, "index.html"), "<h1>any name</h1>");
   writeFileSync(join(scratch, "sites.json"), JSON.stringify({
     "alien.test": { dir: site },
     "go.alien.test": { redirect: "https://alien.test" },
+    "*.alien.test": { dir: anyName },
   }));
   const serve = spawn(process.execPath, [cliPath, "serve"], { env: { ...env(), GROG_SITES: join(scratch, "sites.json") } });
   children.push(serve);
   let out = "";
   serve.stdout.on("data", (chunk) => (out += chunk));
   serve.stderr.on("data", (chunk) => (out += chunk));
-  for (let i = 0; i < 100 && (out.match(/-> localhost/g) || []).length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 100 && (out.match(/-> localhost/g) || []).length < 3; i++) await new Promise((r) => setTimeout(r, 50));
 
   assert.deepEqual(await get("alien.test", "/"), { status: 200, body: "<h1>alien</h1>" });
+  // A name with no entry of its own goes to the wildcard; one with its own keeps it.
+  assert.deepEqual(await get("report--acme.alien.test", "/"), { status: 200, body: "<h1>any name</h1>" });
+  assert.equal((await get("go.alien.test", "/")).status, 301);
   assert.equal((await get("alien.test", "/css/a.css")).body, "body{}");
   // Text a browser opens is served as text, not as a download.
   const type = (path) => new Promise((resolve) => https.get(
@@ -319,9 +326,10 @@ test("grog serve keeps the sites of sites.json online, files only from their fol
 
   // Removing a site from the file takes it offline.
   writeFileSync(join(scratch, "sites.json"), JSON.stringify({ "alien.test": { dir: site } }));
-  for (let i = 0; i < 100 && !out.includes("[go.alien.test] stopped"); i++) await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 100 && !(out.includes("[go.alien.test] stopped") && out.includes("[*.alien.test] stopped")); i++) await new Promise((r) => setTimeout(r, 50));
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.match((await get("go.alien.test")).body, /This site is offline/);
+  assert.match((await get("report--acme.alien.test")).body, /This site is offline/);
   serve.kill();
 });
 

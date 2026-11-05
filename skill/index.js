@@ -951,7 +951,7 @@ function openTunnel({ port, domain = "", settings, say = console.log, warn = con
   // taken over by someone else can then only ask for streams to this one port.
   const base = settings.host.replace(/^up\./, "").replace(/\./g, "\\.");
   const linkPattern = domain
-    ? new RegExp(`^https://${domain.replace(/\./g, "\\.")}$`)
+    ? new RegExp(`^https://${domain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
     : new RegExp(`^https://[a-z0-9]{6,32}\\.${base}$`);
   const printable = (text) => String(text).replace(/[^\x20-\x7e]/g, "?").slice(0, 200);
 
@@ -1274,7 +1274,9 @@ async function handleServe() {
     const wanted = new Map();
     for (const [host, spec] of Object.entries(configured || {})) {
       const name = host.toLowerCase().replace(/\.$/, "");
-      if (!HOST_PATTERN.test(name) || typeof spec !== "object" || spec === null) {
+      // "*.<site domain>" claims every name below it that has no entry of its own.
+      const plain = name.startsWith("*.") ? name.slice(2) : name;
+      if (!HOST_PATTERN.test(plain) || typeof spec !== "object" || spec === null) {
         console.error(`! skipping ${host}: not a host name with a site description`);
         continue;
       }
