@@ -16,6 +16,10 @@ and the bytes are piped both ways, so HTTP, keep-alive and WebSockets all pass.
   alienwatch.buzz and its subdomains). Fixed hosts are guessable, so they are
   for things meant to be seen. A new claim with the token takes the host over,
   which is how a restarted `grog serve` gets its sites back.
+- A site domain can also be claimed whole, as `*.<site domain>`: a name one
+  label below it that has no open claim of its own goes there (a service that
+  routes by Host, such as one host per customer, needs no claim per name).
+  A name's own claim always wins.
 - TLS uses a wildcard certificate for the domain, and each site domain its own,
   picked by SNI; all are reloaded on SIGHUP.
 - Open links survive a restart of the relay: their hosts and secrets are kept
@@ -149,8 +153,26 @@ def site_of(host):
     return None
 
 
+def wildcard_of(host):
+    """The wildcard claim that may answer for host: *.<site domain>, for a name one label below it."""
+    domain = site_of(host)
+    return "*." + domain if domain and host != domain else None
+
+
+def tunnel_for(host):
+    """The open link for a host: its own claim first, then its site domain's wildcard."""
+    tunnel = tunnels.get(host)
+    if tunnel is not None and tunnel.control is not None:
+        return tunnel
+    wild = wildcard_of(host)
+    fallback = tunnels.get(wild) if wild else None
+    return fallback if fallback is not None and fallback.control is not None else tunnel
+
+
 def claimable(host):
     """Whether a client may ask for this fixed host."""
+    if host.startswith("*."):
+        return host[2:] in site_contexts
     if not HOSTNAME.match(host):
         return False
     if host.endswith("." + DOMAIN):
@@ -373,7 +395,7 @@ async def serve_https(reader, writer):
     except Exception:
         return await close(writer)
     host = host_of(head)
-    tunnel = tunnels.get(host)
+    tunnel = tunnel_for(host)
     if tunnel is None or tunnel.control is None:
         if host in (DOMAIN, CONTROL_HOST):
             title, text = "grog", "Public links to work in progress."
